@@ -1,0 +1,31 @@
+---------------------- LINE DICTIONARY ---------------------------------------
+LineType     Diam     MassDenInAir    EA        CB   CIntDamp  Ca   Cdn  Cdt
+(-)          (m)      (kg/m)         (N)       (-)   (Pa-s)   (-)  (-)  (-)
+main         0.216     286.56      1.22976E9    0.5    0        0    0    0
+---------------------- NODE PROPERTIES ---------------------------------------
+Node Type       X          Y           Z          M     B     FX    FY    FZ
+(-)  (-)       (m)         (m)         (m)       (kg)  (mˆ3)  (N)   (N)   (N)
+1     VESSEL    17.820     -23.794      -3.000    0     0     0     0     0
+2     FIX      499.763     -15.382     -64.500    0     0     0     0     0
+3     VESSEL    17.820      23.794      -3.000    0     0     0     0     0
+4     FIX      499.763      15.382     -64.500    0     0     0     0     0
+5     VESSEL    11.696      26.786      -3.000    0     0     0     0     0
+6     FIX     -236.561     440.499     -64.500    0     0     0     0     0
+7     VESSEL   -29.517       3.536      -3.000    0     0     0     0     0
+8     FIX     -263.203     425.117     -64.500    0     0     0     0     0
+9     VESSEL   -29.517      -3.536      -3.000    0     0     0     0     0
+10    FIX     -263.203    -425.117     -64.500    0     0     0     0     0
+11    VESSEL    11.696     -26.786      -3.000    0     0     0     0     0
+12    FIX     -236.561    -440.499     -64.500    0     0     0     0     0
+---------------------- LINE PROPERTIES ---------------------------------------
+Line   LineType  UnstrLen    NodeAnch  NodeFair  Flags
+(-)   (-)       (m)         (-)       (-)       (-)
+1     main      500.0        2         1          tension_fair tension_anch
+2     main      500.0        4         3          tension_fair tension_anch
+3     main      500.0        6         5          tension_fair tension_anch
+4     main      500.0        8         7          tension_fair tension_anch
+5     main      500.0        10        9          tension_fair tension_anch
+6     main      500.0        12        11         tension_fair tension_anch
+---------------------- SOLVER OPTIONS-----------------------------------------
+Option
+(-)

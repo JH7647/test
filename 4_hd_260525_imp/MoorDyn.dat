@@ -1,0 +1,43 @@
+--------------------- MoorDyn Input File ------------------------------------
+Mooring system for 3MW
+True    Echo      - echo the input file data (flag)MoorDyn input file for mooring system
+----------------------- LINE TYPES ------------------------------------------
+Name     Diam      MassDen       EA         BA/-zeta    EI    Cd      Ca     CdAx   CaAx
+(-)       (m)      (kg/m)        (N)        (N-s/-)    (-)   (-)     (-)    (-)    (-)
+main     0.216      286.56       1229760000  -1.0       0    1.33    0.87    0.2   0.435  
+---------------------- POINTS --------------------------------                                           
+ID     Attachment   X          Y         Z      M      V       CdA   CA
+(-)    (-)         (m)        (m)       (m)    (kg)   (m^3)   (m^2)  (-)
+1    Vessel      17.820    -23.794     -3.000     0    0    0    0  
+2    Fixed       499.763   -15.382    -64.500     0    0    0    0  
+3    Vessel      17.820     23.794     -3.000     0    0    0    0   
+4    Fixed       499.763    15.382    -64.500     0    0    0    0   
+5    Vessel      11.696     26.786     -3.000     0    0    0    0    
+6    Fixed      -236.561   440.499    -64.500     0    0    0    0    
+7    Vessel     -29.517      3.536     -3.000     0    0    0    0    
+8    Fixed      -263.203   425.117    -64.500     0    0    0    0    
+9    Vessel     -29.517     -3.536     -3.000     0    0    0    0    
+10   Fixed      -263.203  -425.117    -64.500     0    0    0    0    
+11   Vessel      11.696    -26.786     -3.000     0    0    0    0  
+12   Fixed      -236.561  -440.499    -64.500     0    0    0    0    
+---------------------- LINES --------------------------------------                                           
+ID      LineType   AttachA   AttachB  UnstrLen  NumSegs   Outputs
+(-)       (-)       (-)       (-)         (m)      (-)         (-)   
+1   	main	2	1	500	  6 	-
+2	    main	4	3	500	  6 	-
+3	    main	6	5	500	  6 	-
+4	    main	8	7	500	  6 	-
+5	    main	10	9	500	  6 	-
+6	    main	12	11	500	  6 	-
+---------------------- SOLVER OPTIONS-----------------------------------------
+0.001    dtM       - time step to use in mooring integration (s)
+3.0e6    kbot      - bottom stiffness (Pa/m)
+3.0e5    cbot      - bottom damping (Pa-s/m)
+1.0      dtIC      - time interval for analyzing convergence during IC gen (s)
+600.0     TmaxIC    - max time for ic gen (s)
+4.0      CdScaleIC - factor by which to scale drag coefficients during dynamic relaxation (-)
+0.001     threshIC  - threshold for IC convergence (-)                                          
+-------------------------- OUTPUTS --------------------------------
+FairTen1 FairTen2 FairTen3 FairTen4 FairTen5 FairTen6 CON1FX CON3FX CON5FX CON7FX CON9FX CON11FX L1N1fX L1N2fX L3N1fX 
+END
+------------------------- need this line --------------------------------------
