@@ -12,13 +12,14 @@ from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QTabWidget, QL
 from PySide6.QtWidgets import QMessageBox, QFileDialog
 from PySide6.QtCore import QPoint, Qt,QSettings, Qt, QPoint, QSettings, QProcess
 from PySide6.QtGui import QStandardItemModel, QStandardItem
+from PySide6.QtWidgets import QTextEdit, QPushButton, QHBoxLayout
 
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox, QWidget, QVBoxLayout, QTreeView
 
-from src.core.openfast_io import OpenFastIO  # 💡 코어 엔진 임포트
+from src.core.openfast_io import OpenFastIO  # 코어 엔진 임포트
 
 class FilesTab(QWidget):
-    """ 💡 오직 파일 디렉토리 탐색과 드래그앤드롭 모션, 트리 배지만 책임지는 정석 UI 위젯 """
+    """ 오직 파일 디렉토리 탐색과 드래그앤드롭 모션, 트리 배지만 책임지는 정석 UI 위젯 """
     def __init__(self, main_window, parent=None):
         super().__init__(parent)
         self.main_window = main_window  # 상위 컨트롤러 메인 창 정보 저장 (탭 라우팅 신호용)
@@ -28,6 +29,7 @@ class FilesTab(QWidget):
     def init_ui(self):
         """ 🎨 트리뷰 레이아웃 배치 및 이벤트 바인딩 """
         self.setAcceptDrops(True)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
 
@@ -55,6 +57,80 @@ class FilesTab(QWidget):
 
         layout.addWidget(self.tree_view)
         
+    # 하단 제어 영역 시작: 버튼 2개 (가로 배열)
+        bottom_container_layout = QHBoxLayout()
+        bottom_container_layout.setSpacing(15) # 버튼 구역과 로그 창 사이의 간격
+
+        left_button_layout = QVBoxLayout()
+        left_button_layout.setSpacing(10)  # Start 버튼과 Stop 버튼 사이의 세로 여백
+
+        # 버튼 A (Start) - 파란색 테두리와 글자 색상 반영
+        self.btn_run_fast = QPushButton("🚀 Start")
+        self.btn_run_fast.setMinimumHeight(45)  # 이미지처럼 두툼하게 높이 설정
+        self.btn_run_fast.setFixedWidth(160)   # 버튼의 고정 가로폭 지정
+        self.btn_run_fast.setStyleSheet("""
+            QPushButton {
+                background-color: #E1F5FE; /* 연한 파스텔 블루 배경 */
+                color: #0284C7;             /* 선명한 파란색 글자 */
+                font-weight: bold;
+                font-size: 14px;
+                border: 1px solid #B3E5FC;  /* 은은한 테두리 */
+                border-radius: 4px;
+            }
+            QPushButton:disabled {
+                background-color: #F3F4F6;
+                color: #9CA3AF;
+                border: 1px solid #E5E7EB;
+            }
+        """)
+        self.btn_run_fast.clicked.connect(self.run_openfast_process)
+        
+        # 버튼 B (Stop) - 이미지처럼 연한 배경에 빨간 점/글자 톤 반영
+        self.btn_stop_fast = QPushButton("🛑 Stop")
+        self.btn_stop_fast.setMinimumHeight(45)
+        self.btn_stop_fast.setFixedWidth(160)
+        self.btn_stop_fast.setStyleSheet("""
+            QPushButton {
+                background-color: #F3F4F6; /* 기본 연한 회색 배경 */
+                color: #4B5563;             /* 부드러운 다크 그레이 글자 */
+                font-weight: bold;
+                font-size: 14px;
+                border: 1px solid #D1D5DB;  
+                border-radius: 4px;
+            }
+            QPushButton:disabled {
+                background-color: #F9FAFB;
+                color: #D1D5DB;
+                border: 1px solid #E5E7EB;
+            }
+        """)
+        self.btn_stop_fast.setEnabled(False)
+        self.btn_stop_fast.clicked.connect(self.stop_openfast_process)
+        
+        left_button_layout.addWidget(self.btn_run_fast)
+        left_button_layout.addWidget(self.btn_stop_fast)
+        bottom_container_layout.addLayout(left_button_layout)
+
+        self.cmd_output = QTextEdit()
+        self.cmd_output.setReadOnly(True)
+        self.cmd_output.setFixedHeight(100)  # 이미지와 유사하게 하단 높이 고정
+        self.cmd_output.setStyleSheet("""
+            QTextEdit {
+                background-color: #F4F5F7;  /* 연한 그레이 배경 */
+                color: #2D3748;             /* 부드러운 다크 차콜 글자색 */
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 13px;
+                border: 1px solid #E2E8F0;  /* 은은한 외곽 테두리 */
+                border-radius: 4px;
+                padding: 10px;
+            }
+        """)
+        self.cmd_output.append("💡 Simulation logs will be displayed.\n")
+        
+        bottom_container_layout.addWidget(self.cmd_output)
+        layout.addLayout(bottom_container_layout)
+
+
         # 레지스트리에서 마지막 세션 복구 자동 가동
         settings = QSettings("JHLEE", "OFA")
         last_fst_path = settings.value("LastFstPath_fst", "")
@@ -73,12 +149,16 @@ class FilesTab(QWidget):
         # 주소를 Computer Registry에 저장
         settings = QSettings("JHLEE", "OFA")
         settings.setValue("LastFstPath_fst", file_path)
+
+        # [추가] 파일명 추출 후 메인 윈도우 타이틀 업데이트
+        if hasattr(self, 'main_window') and self.main_window:
+            file_name = os.path.basename(file_path)
+            self.main_window.setWindowTitle(f"OFA : [{file_name}]")
            
         root_item = QStandardItem(f"📁 Main \t: {file_path}")
         self.tree_model.appendRow(root_item)
         
         config = OpenFastIO.update_config_from_fst(file_path)
-        # print(json.dumps(config, indent=4, ensure_ascii=False))
 
         module = "CompElast"                
         comp_elast = int( config[module]["current"] or config[module]["default"] )
@@ -196,6 +276,10 @@ class FilesTab(QWidget):
         self.tree_view.collapseAll()
         self.tree_view.expandToDepth(0)
 
+        with open(file_path + ".debug", "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=4, ensure_ascii=False)    
+            print('Config file was written to f"{file_path}.debug" ')
+
     # ================= [ 🖱️ 마우스 드래그 앤 드롭 및 클릭 핸들러 ] =================
 
     def dragEnterEvent(self, event):
@@ -224,6 +308,10 @@ class FilesTab(QWidget):
 
                 if msg_box.exec() == QMessageBox.Yes:
                     self.load_fst_file(drop_file_path)
+
+            if not current_main or current_main == drop_file_path:
+                self.load_fst_file(drop_file_path)
+
             return
         
         # --- Case 2: 하위 모듈 파일들(.dat 등)이 드롭된 경우 ---
@@ -386,7 +474,6 @@ class FilesTab(QWidget):
             except FileNotFoundError:
                 subprocess.Popen(["notepad.exe", file_path])
 
-
     def on_item_right_clicked(self, pos):
    # 트리 뷰 마우스 우클릭 팝업 메뉴 화면 처리 
         from PySide6.QtWidgets import QMenu
@@ -450,7 +537,255 @@ class FilesTab(QWidget):
 
         menu.exec(self.tree_view.mapToGlobal(pos))  # 마우스가 클릭된 전역 좌표(화면 기준 주소)에 메뉴판 오픈
 
-    def mouse_Rclick_run_openfast(self, text):
+    def run_openfast_process(self):
+        """ 🚀 [멀티 러닝 지원] 트리뷰에서 선택된 .fst 파일을 독립된 백그라운드 프로세스로 동시 실행하는 함수 """
+        
+        # 0️⃣ 멀티 프로세스 관리 리스트가 선언되어 있지 않다면 안전하게 동적 생성
+        if not hasattr(self, 'running_processes'):
+            self.running_processes = []
+
+        self.running_processes = [item for item in self.running_processes if item[0].poll() is None]
+        
+        # 만약 청소 후 남은 활성 프로세스가 없다면 Stop 버튼 비활성화
+        if not self.running_processes:
+            self.btn_stop_fast.setEnabled(False)
+  
+        # 1️⃣ 현재 트리뷰에서 어떤 아이템(파일)이 선택되었는지 탐색
+        indexes = self.tree_view.selectedIndexes()
+        if not indexes:
+            QMessageBox.warning(self, "선택 파일 없음", "트리뷰에서 실행할 메인 세션(.fst) 파일을 먼저 선택해 주세요.")
+            return
+
+        selected_item = self.tree_model.itemFromIndex(indexes[0])
+        item_text = selected_item.text()
+
+        # 2️⃣ 데이터 가공: 이미지 속 "Main : C:\TEST\..." 포맷에서 실제 경로 추출
+        if ":" in item_text and "C:" not in item_text.split(":", 1)[0]:
+            file_path = item_text.split(":", 1)[1].strip()
+        else:
+            file_path = item_text.strip()
+
+        # 파일 확장자가 .fst 인지 검증하고 물리적 존재 여부 체크
+        if not file_path.lower().endswith('.fst'):
+            QMessageBox.warning(self, "입력 파일 오류", "OpenFAST 시뮬레이션은 반드시 .fst 확장자 파일로 시작해야 합니다.")
+            return
+
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self, "입력 파일 오류", f"시뮬레이션을 실행할 파일이 경로에 존재하지 않습니다.\n\n경로: {file_path}")
+            return
+
+        # 3️⃣ 중복 실행 방지 검사 (동일한 파일이 이미 백그라운드에서 돌고 있는지 체크)
+        for p, p_path in self.running_processes:
+            if p_path == file_path:
+                QMessageBox.warning(self, "이미 실행 중", f"해당 파일은 이미 시뮬레이션이 진행 중입니다.\n파일: {os.path.basename(file_path)}")
+                return
+
+        # 4️⃣ OpenFAST 실행 파일(.exe) 경로 검증 및 QSettings 로드
+        settings = QSettings("JHLEE", "OFA")
+        openfast_path = settings.value("LastOpenFastPath", "")
+
+        if not openfast_path or not os.path.exists(openfast_path):
+            reply = QMessageBox.information(
+                self, "Register OpenFAST.exe Path!",
+                "최초 1회 openFAST.exe 파일의 위치 등록이 필요합니다.\n확인 버튼을 눌러 실행 파일을 선택해 주세요.",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+            )
+            if reply == QMessageBox.StandardButton.Ok:
+                selected_file, _ = QFileDialog.getOpenFileName(
+                    self, "openFAST.exe 파일 선택", "C:/", "Executable Files (openFAST.exe);;All Files (*)"
+                )
+                if selected_file:
+                    settings.setValue("LastOpenFastPath", selected_file)
+                    openfast_path = selected_file
+                else:
+                    return
+            else:
+                return
+
+        # 5️⃣ 실행 준비: 작업 디렉터리(CWD) 설정 및 로그 출력
+        working_dir = os.path.dirname(file_path)
+        file_name = os.path.basename(file_path)
+        raw_cmd_string = f'"{openfast_path}" "{file_name}"'
+
+        self.cmd_output.append(f"⏳ [Start] New CMD : {file_path} ... (Current Running Count: {len(self.running_processes) + 1})")
+        
+        # 멀티 러닝 모드이므로 항상 Stop 버튼 활성화 유지
+        self.btn_stop_fast.setEnabled(True)
+
+        # 6️⃣ QProcess 독립 인스턴스 생성 및 비동기 멀티 연산 가동
+        try:
+            # 'cmd.exe /c' 옵션을 주면 프로그램 연산이 완전히 완료되는 순간 CMD 창이 자동으로 파괴/폐쇄
+            cmd_string = f'cmd.exe /c title "{file_name}" & "{openfast_path}" "{file_path}"'
+            
+            process = subprocess.Popen(
+                cmd_string, 
+                cwd=working_dir,
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
+
+            # 관리 리스트에 (Popen 프로세스 객체, 파일 경로) 저장
+            self.running_processes.append((process, file_path))
+
+        except Exception as e:
+            QMessageBox.critical(self, "실행 실패", f"OpenFAST 구동 중 에러가 발생했습니다.\n\n사유: {e}")
+
+    def stop_openfast_process(self):
+        """ 🛑 'Stop' 버튼 클릭 시, 에러로 멈춘 유령 CMD 창까지 포함하여 강제 파괴하는 철벽 대응 함수 """
+        if not hasattr(self, 'running_processes') or not self.running_processes:
+            QMessageBox.information(self, "안내", "현재 실행 중인 CMD 시뮬레이션 창이 없습니다.")
+            return
+
+        # 💡 [핵심 변경] poll()이 None인 것뿐만 아니라, 리스트에 등록된 모든 프로세스 시도를 검사 대상에 포함합니다.
+        # 이미지처럼 FATAL ERROR로 멈춘 창은 poll() 결과가 꼬일 수 있으므로 등록된 전체 개수를 기준 잡습니다.
+        total_count = len(self.running_processes)
+
+        reply = QMessageBox.question(
+            self, "전체 작업 중단", 
+            f"현재 구동 및 에러로 인해 화면에 남아있는 모든 OpenFAST CMD 창({total_count}개)과\n"
+            "내부 연산 엔진을 강제로 완전히 청소하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                # 리스트에 기록된 모든 Popen 프로세스를 예외 없이 순회합니다.
+                for process, path in self.running_processes:
+                    pid = process.pid  # 프로세스 고유 ID 추출
+                    
+                    # 💡 .poll() 상태와 관계없이 윈도우 커널 레벨에서 taskkill을 강제 집행합니다.
+                    # 이미 죽은 프로세스라면 무시되고, 에러로 멈춰있는 유령 프로세스는 이 명령어로 확실히 사살됩니다.
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)], 
+                        stdout=subprocess.DEVNULL, 
+                        stderr=subprocess.DEVNULL,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                
+                self.cmd_output.append(f"\n❌ [Stop] {total_count} OpenFAST Process was Terminated.")
+                
+            except Exception as e:
+                self.cmd_output.append(f"\n⚠️ [오류] 프로세스 완전 강제 종료 중 예외 발생: {e}")
+
+            # 💡 [중요] 연산 창들을 커널 레벨에서 밀어버렸으므로, 파이썬 내부 관리 백업 리스트를 깨끗하게 비웁니다.
+            self.running_processes.clear()
+            self.btn_stop_fast.setEnabled(False)
+            
+
+    def mouse_Rclick_run_openfast(self, text=""):
+        """ 🖱️ [우클릭 전용] 기존 경로를 기반으로 '새 파일 저장' 다이얼로그를 띄우고, 새로 입력되거나 변경된 파일명으로 세션을 저장한 뒤 OpenFAST를 실행합니다. """
+
+        # 0️⃣ 멀티 프로세스 관리 리스트 안전 필터링 청소
+        if not hasattr(self, 'running_processes'):
+            self.running_processes = []
+        #self.running_processes = [item for item in self.running_processes if item.poll() is None]
+        self.running_processes = [(proc, path) for proc, path in self.running_processes if proc.poll() is None]
+        
+        # 1️⃣ 기본(기존) 파일 경로 파싱
+        if ":" not in text:
+            QMessageBox.warning(self, "입력 오류", "유효한 파일 세션 텍스트가 아닙니다.")
+            return
+        print(f"[우클릭] 기존 파일 경로: {text}")
+
+        file_path_preset = text.split(":", 1)[1].strip()
+        default_dir = os.path.dirname(file_path_preset)
+        default_name = os.path.basename(file_path_preset)  
+        initial_path = os.path.join(default_dir, default_name)
+
+        # 2️⃣ [핵심 수정] 새 파일 저장/생성 다이얼로그 띄우기 ([저장] 버튼으로 출력됨)
+        final_file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "New Simulation with your suggesting file name",
+            initial_path,
+            "OpenFAST Files (*.fst);;All Files (*)",
+            options=QFileDialog.Option.DontConfirmOverwrite  # 👈 시스템 경고창 팝업을 강제로 발생시키지 않는 플래그
+        )
+
+        # 유저가 취소 버튼을 누르면 프로세스 가동 없이 즉시 종료
+        if not final_file_path:
+            return  
+
+        final_file_path = os.path.abspath(final_file_path) # 절대 경로 표준화
+        preset_abs_path = os.path.abspath(file_path_preset)
+
+        # 3️⃣ 파일 변경(새로 만들기) 여부 체크 및 분기 처리
+        if final_file_path == preset_abs_path:
+            # 이름을 변경하지 않고 기존 파일명 그대로 저장을 눌렀을 때의 처리
+            reply = QMessageBox.warning(self, "파일 이름 미변경", "기존 파일과 동일한 이름이므로 파일을 새로 만들지 않습니다." )
+            return
+
+        else:
+            # 새로운 파일명이 입력되었을 때 -> 트리뷰 구조를 새 파일 이름으로 자동 갱신 및 저장
+            # (필요 시 이곳에서 shutil.copy 등을 이용해 기존 .fst 내용을 새 파일로 복사하는 로직을 넣을 수 있습니다)
+            try:
+                if os.path.exists(preset_abs_path) and not os.path.exists(final_file_path):
+                    import shutil
+                    shutil.copy(preset_abs_path, final_file_path) # 기존 뼈대 파일 복사 생성
+            except Exception as e:
+                self.cmd_output.append(f"⚠️ 새 파일 물리 생성 중 알림: {e}\n")
+
+            if hasattr(self, 'load_fst_file'):
+                self.load_fst_file(final_file_path)
+                self.cmd_output.append(f"✨ 새로운 파일 세션이 생성 및 저장되었습니다: {os.path.basename(final_file_path)}")
+
+        # 4️⃣ 생성된 파일 확장자 검증
+        if not final_file_path.lower().endswith('.fst'):
+            QMessageBox.warning(self, "입력 파일 오류", "OpenFAST 시뮬레이션은 반드시 .fst 확장자 파일이어야 합니다.")
+            return
+
+        # 5️⃣ 중복 실행 방지 검사
+        for p, p_path in self.running_processes:
+            if os.path.abspath(p_path) == final_file_path:
+                QMessageBox.warning(self, "이미 실행 중", f"해당 파일은 이미 시뮬레이션이 진행 중입니다.\n파일: {os.path.basename(final_file_path)}")
+                return
+
+        # 6️⃣ OpenFAST 실행 파일(.exe) 경로 검증 및 QSettings 로드
+        settings = QSettings("JHLEE", "OFA")
+        openfast_path = settings.value("LastOpenFastPath", "")
+
+        if not openfast_path or not os.path.exists(openfast_path):
+            reply = QMessageBox.information(
+                self, "Register OpenFAST.exe Path!",
+                "최초 1회 openFAST.exe 파일의 위치 등록이 필요합니다.\n확인 버튼을 눌러 실행 파일을 선택해 주세요.",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+            )
+            if reply == QMessageBox.StandardButton.Ok:
+                selected_file, _ = QFileDialog.getOpenFileName(
+                    self, "openFAST.exe 파일 선택", "C:/", "Executable Files (openFAST.exe);;All Files (*)"
+                )
+                if selected_file:
+                    settings.setValue("LastOpenFastPath", selected_file)
+                    openfast_path = selected_file
+                else: return
+            else: return
+
+        # 7️⃣ 실행 준비: 최종 타겟 기준으로 작업 디렉터리(CWD) 및 파일명 분리
+        working_dir = os.path.dirname(final_file_path)
+        file_name = os.path.basename(final_file_path)
+
+        self.cmd_output.append(f"⏳ [Start] New CMD : {file_name} ... (Current Running Count: {len(self.running_processes) + 1})")
+        self.btn_stop_fast.setEnabled(True)
+
+        # 8️⃣ 독립 인스턴스 생성 및 비동기 멀티 연산 가동
+        try:
+            cmd_string = f'cmd.exe /c title {file_name} & "{openfast_path}" "{file_name}"'
+            
+            process = subprocess.Popen(
+                cmd_string, 
+                cwd=working_dir,
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
+
+            self.running_processes.append((process, final_file_path))
+
+        except Exception as e:
+            QMessageBox.critical(self, "실행 실패", f"OpenFAST 구동 중 에러가 발생했습니다.\n\n사유: {e}")
+
+   
+
+
+
+   
+    def mouse_Rclick_run_openfast_(self, text):   
         """ 우클릭 메뉴에서 'OpenFAST 실행하기'를 선택했을 때 OpenFAST를 실행하는 함수 """
         if hasattr(self, 'main_window') and self.main_window:
             if self.main_window.is_simulation_running():
@@ -550,8 +885,6 @@ class FilesTab(QWidget):
         else:
             QMessageBox.warning(self, "Warning", f"No directory path was found! \n\n경로: {dir_path}")
 
-
-   
     def mouse_Rclick_save_project(self, text):
         "Save project files to new folder"
          

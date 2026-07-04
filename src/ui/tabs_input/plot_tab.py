@@ -7,9 +7,8 @@ from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QTreeView, QCo
                              QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QGridLayout)
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMenu, QDialog  # QMenu, QDialog 추가
+from PySide6.QtGui import QStandardItemModel, QStandardItem, QGuiApplication
 
-from PySide6.QtGui import QStandardItemModel, QStandardItem
-from PySide6.QtGui import QClipboard, QGuiApplication
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.widgets import RectangleSelector
@@ -21,9 +20,10 @@ from src.core.openfast_io import OpenFastIO  # 💡 코어 엔진 임포트
 class PlotTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.df = None  # 파싱된 데이터 저장
-        self.columns = [] # 컬럼 이름 리스트
-        
+
+        # 구조: { file_title: (dataframe, columns_list) }
+        self.data_dict = {} 
+
         # Drag & Drop 활성화
         self.setAcceptDrops(True)
         self.init_ui()
@@ -55,6 +55,11 @@ class PlotTab(QWidget):
         self.var_tree = QTreeView()
         self.var_tree.setHeaderHidden(True)
         self.var_tree.setIndentation(10)
+
+        self.var_tree.setSelectionMode(QAbstractItemView.ExtendedSelection) 
+        self.var_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.var_tree.customContextMenuRequested.connect(self.var_tree_context_menu)
+
         self.var_tree.setStyleSheet("""
             QTreeView::item {
                 padding-left: 0px;
@@ -219,53 +224,69 @@ class PlotTab(QWidget):
 
     def update_plot(self, *args):
         """ 변수 선택 시 우측 캔버스에 그래프를 실시간으로 그리는 함수 """
-        if self.df is None or len(self.columns) == 0:
+        if not self.data_dict:
             return
 
-        # 1. 현재 콤보박스에서 선택된 X축 컬럼 확인
-        x_col = self.combo_x.currentText()
-        if x_col not in self.df.columns:
-            return
-
-        # 2. QTreeView에서 다중 선택된 Y축 컬럼 리스트 추출
+        # QTreeView에서 유저가 선택한 모든 행 인덱스 리스트 추출
         selected_indexes = self.var_tree.selectionModel().selectedRows()
-        y_cols = []
-        for index in selected_indexes:
-            col_name = index.data(Qt.UserRole)  # 노드에 심어둔 오리지널 컬럼명 추출
-            if col_name and col_name in self.df.columns and col_name != x_col:
-                y_cols.append(col_name)
 
-        # 3. Y축 변수가 선택되지 않았다면 안내 텍스트 출력 후 종료
-        if not y_cols:
+        # 아무것도 선택되지 않았을 때 안내창 클리어
+        if not selected_indexes:
             self.ax.clear()
-            self.ax.text(0.5, 0.5, "Drop an OpenFAST .out file here to plot", 
+            self.ax.text(0.5, 0.5, "Drop files or select variable(s) from the tree",
                          ha='center', va='center', fontsize=12, color='gray')
             self.ax.set_xticks([])
             self.ax.set_yticks([])
             self.canvas.draw()
             return
 
-        # 4. Matplotlib 축 리셋 후 데이터 플롯 생성
         self.ax.clear()
-        x_data = self.df[x_col]
+        x_col_text = self.combo_x.currentText()
+        plotted_count = 0
 
-        for y_col in y_cols:
-            y_data = self.df[y_col]
-            self.ax.plot(x_data, y_data, label=y_col, linewidth=1.5)
+        # 다중 선택된 인덱스들을 순회하며 멀티 파일 플롯 렌더링 시작
+        for index in selected_indexes:
+            col_name = index.data(Qt.UserRole)         # 변수명
+            file_title = index.data(Qt.UserRole + 1)   # 메타데이터에서 추출한 파일 식별자
 
-        # 5. UI 옵션 상태(Grid, Log 스케일) 반영
+            # 추출된 파일 식별자를 통해 data_dict에서 각 파일 고유의 DataFrame 탐색 매핑
+            if file_title in self.data_dict:
+                df, columns = self.data_dict[file_title]
+                
+                # 유효성 검사: 선택한 X축 이름이 해당 파일 데이터프레임 내에 존재하는지 체크
+                target_x = x_col_text
+                if target_x not in df.columns:
+                    # 파일 간 열 규격이 깨질 경우 대비용 Time 자동 타협 보정 코드
+                    time_cols = [c for c in columns if 'Time' in c]
+                    target_x = time_cols[0] if time_cols else columns[0]
+
+                if col_name in df.columns and col_name != target_x:
+                    x_data = df[target_x]
+                    y_data = df[col_name]
+                    
+                    # 💡 다중 파일 그래프 겹쳐 그릴 때 구분이 쉽도록 라벨 앞에 파일명 태그 추가
+                    label_name = f"[{file_title}] {col_name}"
+                    self.ax.plot(x_data, y_data, label=label_name, linewidth=1.5)
+                    plotted_count += 1
+
+        if plotted_count == 0:
+            self.canvas.draw()
+            return
+
+        # UI 옵션 상태(Grid, Log 스케일) 동적 제어 반영
         self.ax.grid(self.chk_grid.isChecked())
         if self.chk_logx.isChecked(): self.ax.set_xscale('log')
         if self.chk_logy.isChecked(): self.ax.set_yscale('log')
 
-        # 6. 레이블 및 범례(Legend) 추가
-        self.ax.set_xlabel(x_col)
-        self.ax.set_ylabel(y_cols[0] if len(y_cols) == 1 else "Values")
+        # 레이블 및 범례(Legend) 갱신 연동
+        self.ax.set_xlabel(x_col_text)
+        self.ax.set_ylabel("Values")
         self.ax.legend(loc="upper right")
 
-        # 7. Qt 도화지(Canvas) 새로고침 갱신
+        # 여백 조절 및 Qt 도화지 리렌더링
         self.fig.subplots_adjust(left=0.15, right=0.95, top=0.95, bottom=0.15)
         self.canvas.draw()
+
 
     def dragEnterEvent(self, event):
         "Drag & Drop 핸들러"
@@ -277,7 +298,6 @@ class PlotTab(QWidget):
             file_path = url.toLocalFile()
             if file_path.endswith('.out') or file_path.endswith('.txt'):
                 self.load_output_data(file_path)
-                break
 
     def load_output_data(self, file_path):
         "데이터 파싱 및 로드"
@@ -299,52 +319,69 @@ class PlotTab(QWidget):
             raw_cols = lines[header_idx].strip().split()
             raw_units = lines[header_idx + 1].strip().split()
             
-            self.columns = []
+            columns = []
             for col, unit in zip(raw_cols, raw_units):
-                self.columns.append(f"{col}_{unit}")
+                columns.append(f"{col}_{unit}")
 
-            # 데이터프레임 로드
-            self.df = pd.read_csv(file_path, skiprows=header_idx+2, sep=r'\s+', names=self.columns, header=None)
+            # 데이터프레임 빌드
+            df = pd.read_csv(file_path, skiprows=header_idx+2, sep=r'\s+', names=columns, header=None)
 
-            # UI 컴포넌트 업데이트
+            base_name = os.path.basename(file_path)
+            file_title = os.path.splitext(base_name)[0]
+
+            # 💡 [변경] 기존 단일 변수 오버라이트 대신 딕셔너리에 파일별 테이블 누적 저장
+            self.data_dict[file_title] = (df, columns)
+
+            # 컴포넌트 전체 화면 동기화
             self.update_ui_components()
 
         except Exception as e:
             print(f"Error parsing out file: {e}")
 
-    def update_ui_components(self):
-        if self.df is None:
+    def update_ui_components(self, file_path=None):
+        """ 다중 파일 적재 상태를 기반으로 트리구조와 X축 콤보박스를 갱신 """
+        if not self.data_dict:
             return
 
-        # 1. X축 콤보박스 리스트 채우기 및 기본값 세팅
+       # X축 콤보박스는 가장 최근에 드롭/추가된 파일의 컬럼 리스트 기준으로 갱신
+        latest_file_title = list(self.data_dict.keys())[-1]
+        _, latest_columns = self.data_dict[latest_file_title]
+
         self.combo_x.blockSignals(True)
+        current_x = self.combo_x.currentText()
         self.combo_x.clear()
-        self.combo_x.addItems(self.columns)
+        self.combo_x.addItems(latest_columns)
         
-        # 'Time_[s]' 또는 첫 번째 열을 기본값으로 설정
-        time_col = [c for c in self.columns if 'Time' in c]
-        if time_col:
-            self.combo_x.setCurrentText(time_col[0])
+        # 기존에 사용자가 선택 중이던 X축이 있으면 유지 처리
+        if current_x in latest_columns:
+            self.combo_x.setCurrentText(current_x)
         else:
-            self.combo_x.setCurrentIndex(0)
+            time_col = [c for c in latest_columns if 'Time' in c]
+            if time_col:
+                self.combo_x.setCurrentText(time_col[0])
+            else:
+                self.combo_x.setCurrentIndex(0)
         self.combo_x.blockSignals(False)
 
-        # 2. 좌측 변수 트리 구조 채우기 (나중 카테고리 확장을 위해 계층구조 설계)
+        # 좌측 트리뷰 리셋 후 적재된 모든 파일을 그룹화하여 계층형 트리 빌드
         self.tree_model.clear()
         
-        # 현재는 루트 폴더 하위에 바로 변수 리스트를 넣는 구조 (나중에 조건 분기하여 카테고리화 가능)
-        root_item = QStandardItem(f"📁 Variables ({len(self.columns)})")
-        root_item.setSelectable(False)
-        self.tree_model.appendRow(root_item)
+        for file_title, (df, columns) in self.data_dict.items():
+            # 부모 폴더 노드 생성: 확장자 제외 파일 이름 주입
+            root_item = QStandardItem(f"📁 {file_title} ({len(columns)})")
+            root_item.setSelectable(True)
+            root_item.setData(file_title, Qt.UserRole + 1)
+            self.tree_model.appendRow(root_item)
 
-        for col in self.columns:
-            var_item = QStandardItem(col)
-            # 데이터를 아이템 내부에 심어두어 나중 조회에 편리하게 함
-            var_item.setData(col, Qt.UserRole) 
-            root_item.appendRow(var_item)
+            for col in columns:
+                var_item = QStandardItem(col)
+                # 변수를 클릭할 때 부모가 누구인지 추적할 수 있도록 파일명을 데이터 롤(+1)
+                var_item.setData(col, Qt.UserRole)              # 역할 1: 고유 컬럼명
+                var_item.setData(file_title, Qt.UserRole + 1)   # 역할 2: 소속 부모 파일명
+                root_item.appendRow(var_item)
             
-        # 끊겼던 마지막 코드를 완성합니다.
         self.var_tree.expandAll()
+
 
     def on_draw_zoom(self, eclick, erelease):
         """ 마우스 왼쪽 드래그로 줌인할 때 호출되는 함수 """
@@ -423,7 +460,7 @@ class PlotTab(QWidget):
         except Exception as e:
             print(f"Clipboard copy error: {e}")
 
-    def mouseRclick_open_to_window(self):
+    def mouseRclick_open_to_window_(self):
         """ 현재 우측 패널(그래프+컨트롤러)과 완벽히 일치하는 새 팝업 창을 생성합니다. """
         try:
             # 독립된 다이얼로그(새 창) 생성
@@ -486,3 +523,305 @@ class PlotTab(QWidget):
             
         except Exception as e:
             print(f"Error opening new window: {e}")
+
+    def mouseRclick_open_to_window(self):
+        """ 🖥️ [버그 완전 수정] 현재 다중 적재 상태 및 옵션과 100% 일치하는 새 팝업 창을 생성합니다. """
+        try:
+            # 1. 독립된 다이얼로그(새 창) 생성 및 크기 세팅
+            pop_win = QDialog(self)
+            pop_win.setWindowTitle("Advanced Graph Viewer")
+            pop_win.resize(900, 700)
+            
+            # 새 레이아웃 구성
+            pop_layout = QVBoxLayout(pop_win)
+            pop_layout.setContentsMargins(5, 5, 5, 5)
+            
+            # 2. 새 PlotTab 인스턴스 가동 및 멀티 파일 데이터 사전 구조 동기화 (CRITICAL FIX)
+            sub_tab = PlotTab(parent=pop_win)
+            
+            # 💡 [핵심 교정 1]: 더 이상 존재하지 않는 self.df 대신, 현재 적재된 멀티 딕셔너리 데이터를 통째로 이식합니다.
+            sub_tab.data_dict = {
+                file_title: (df.copy(), list(cols)) 
+                for file_title, (df, cols) in self.data_dict.items()
+            }
+            
+            # 적재된 전체 데이터를 기반으로 서브 팝업창의 좌측 트리 구조와 컴포넌트 렌더링 동기화
+            sub_tab.update_ui_components()
+            
+            # 3. 현재 메인 탭에 지정된 X축 문자열 이식
+            sub_tab.combo_x.setCurrentText(self.combo_x.currentText())
+            
+            # 4. 다중 선택된 계층형 트리뷰(Y축 항목) 구조 완벽 복제 (CRITICAL FIX)
+            from PySide6.QtCore import QItemSelectionModel
+            
+            # 메인 창에서 파랗게 선택되어 있던 모든 행 인덱스 추출
+            src_sel = self.var_tree.selectionModel().selectedRows()
+            sub_tab_selection_model = sub_tab.var_tree.selectionModel()
+            
+            for idx in src_sel:
+                # 우리가 앞서 심어둔 멀티 롤 메타데이터(변수명, 부모 파일명)를 정확하게 가로챕니다.
+                col_name = idx.data(Qt.UserRole)
+                file_title = idx.data(Qt.UserRole + 1)
+                
+                # 💡 다른 파일에 이름이 똑같은 변수가 있어도, 진짜 동일한 소속 파일의 자식 노드가 맞는지 검증하며 복제합니다.
+                match_items = sub_tab.tree_model.findItems(col_name, Qt.MatchRecursive)
+                for item in match_items:
+                    if item.data(Qt.UserRole + 1) == file_title:
+                        flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+                        sub_tab_selection_model.select(
+                            sub_tab.tree_model.indexFromItem(item), flags
+                        )
+                        break
+            
+            # 5. 하단 체크박스 옵션 싱크 동기화
+            sub_tab.chk_grid.setChecked(self.chk_grid.isChecked())
+            sub_tab.chk_logx.setChecked(self.chk_logx.isChecked())
+            sub_tab.chk_logy.setChecked(self.chk_logy.isChecked())
+            sub_tab.chk_autoscale.setChecked(self.chk_autoscale.isChecked())
+            
+            # 6. 라디오 버튼 활성 모드 싱크 맞추기
+            active_id = self.bg_mode.checkedId()
+            if active_id != -1:
+                sub_tab.bg_mode.button(active_id).setChecked(True)
+            
+            # 7. 데이터 뷰 매핑 완수 후 새 창의 도화지 실시간 차트 렌더링 강제 실행
+            sub_tab.update_plot()
+            
+            # 💡 [요구사항]: 왼쪽 변수 리스트 제어창을 숨겨 깔끔하게 그래프와 옵션만 팝업에 나오게 처리
+            if sub_tab.var_tree.parentWidget():
+                sub_tab.var_tree.parentWidget().hide()
+            
+            # 8. 최종 레이아웃 조립 및 비모달(Modeless) 화면 표출
+            pop_layout.addWidget(sub_tab)
+            pop_win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)    
+            pop_win.show() 
+            
+            print("[Success] 변수 트리 제어창을 숨긴 독립 그래프 패널 새 창 가동 완료.")
+            
+        except Exception as e:
+            import traceback
+            print(f"Error opening new window: {e}")
+            traceback.print_exc() # 짚고 넘어갈 수 있도록 상세 에러 스택 디버그 출력 추가
+
+    def var_tree_context_menu(self, pos):
+        """ 📁 [최종 완성형] 단일 선택 및 다중 선택(Ctrl/Shift)된 모든 파일 세션을 완벽히 수집하여 지우는 함수 """
+        
+        # 1️⃣ 메뉴창을 띄우기 '전'에, 현재 마우스가 위치한 인덱스를 확보합니다.
+        clicked_index = self.var_tree.indexAt(pos)
+        selection_model = self.var_tree.selectionModel()
+        
+        # 💡 [다중 선택 해결책] selectedRows() 대신 selectedIndexes()를 호출하여 파랗게 선택된 모든 마디를 낱개로 긁어모읍니다.
+        raw_selected_indexes = selection_model.selectedIndexes()
+        
+        # 0번째 열(Column 0)에 해당하는 순수 데이터 인덱스들만 중복 없이 정돈하여 백업합니다.
+        backup_indexes = list(set([idx for idx in raw_selected_indexes if idx.column() == 0]))
+        
+        # 만약 Ctrl이나 Shift로 다중 선택을 안 하고, 그냥 특정 파일 위에서 곧바로 우클릭만 딸깍 누른 경우라면
+        # 마우스 커서 바로 밑에 있는 그 인덱스 하나를 백업 리스트에 강제로 채워 넣어 구동시킵니다.
+        if not backup_indexes and clicked_index.isValid():
+            backup_indexes = [clicked_index]
+
+        # ------------------------------------------------------------------
+        # 데이터 사전 확보 완수 후 우클릭 컨텍스트 메뉴 가동
+        # ------------------------------------------------------------------
+        context_menu = QMenu(self)
+        remove_action = context_menu.addAction("❌ 선택한 파일/변수 리스트에서 제거")
+        
+        # 마우스 커서 전역 좌표 기준으로 메뉴 열기
+        action = context_menu.exec(self.var_tree.mapToGlobal(pos))
+        
+        if action == remove_action:
+            from PySide6.QtWidgets import QMessageBox
+            
+            # 사전에 복사해둔 백업 인덱스가 전혀 없다면 에러 리턴
+            if not backup_indexes:
+                QMessageBox.information(self, "안내", "리스트에서 제거할 파일이나 변수를 먼저 마우스로 선택해 주세요.")
+                return
+
+            files_to_remove = set()
+            
+            for index in backup_indexes:
+                item = self.tree_model.itemFromIndex(index)
+                if not item:
+                    continue
+                
+                # 사용자가 최상위 부모(파일 폴더) 노드를 선택한 경우 순수 파일명 발려내기
+                if item.parent() is None:
+                    full_text = item.text().strip()
+                    
+                    # 앞쪽 아이콘/이모지 제거 필터 가동
+                    pure_text = full_text
+                    for char in full_text:
+                        if char.isalnum() or char in ['_', '=', '-', '.']:
+                            pure_text = full_text[full_text.index(char):]
+                            break
+                    
+                    # 뒤쪽 변수 개수 괄호 " (135)" 패턴 완벽 절단 (배열 원소 인덱스 고정)
+                    if " (" in pure_text:
+                        file_title = pure_text.rsplit(" (", 1)[0].strip()
+                    else:
+                        file_title = pure_text.strip()
+                        
+                    files_to_remove.add(file_title)
+                
+                # 사용자가 폴더 내부의 하위 변수 자식 노드들을 마우스 드래그로 선택한 경우
+                else:
+                    file_title = item.data(Qt.UserRole + 1)
+                    if file_title:
+                        files_to_remove.add(str(file_title).strip())
+
+            if not files_to_remove:
+                return
+
+            # 사용자 최종 삭제 여부 더블 체크 대화상자 팝업
+            target_list = ", ".join(list(files_to_remove))
+            reply = QMessageBox.question(
+                self, "파일 제거 확인",
+                f"선택한 {len(files_to_remove)}개의 파일 세션을 리스트와 백엔드 메모리에서 완전히 삭제하시겠습니까?\n\n"
+                f"삭제 대상 키: [ {target_list} ]",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                # 1. 백엔드 메모리 딕셔너리 데이터 소스에서 타겟 키 일괄 완전 삭제
+                for f_title in files_to_remove:
+                    if f_title in self.data_dict:
+                        del self.data_dict[f_title]
+                        print(f"[🗑️ 삭제 완료] {f_title}")
+                    else:
+                        # 2차 방어선: 대소문자 및 미세 공백 불일치 유연 매칭 청소
+                        matched_key = None
+                        for key in self.data_dict.keys():
+                            if key.lower().strip() == f_title.lower().strip():
+                                matched_key = key
+                                break
+                        if matched_key:
+                            del self.data_dict[matched_key]
+                            print(f"[🗑️ 삭제 완료(유연)] {matched_key}")
+                
+                # 2. 남은 데이터들을 기반으로 좌측 트리뷰 및 X축 컴포넌트 자동 동기화 리셋
+                if self.data_dict:
+                    self.update_ui_components()
+                else:
+                    # 데이터 소스가 텅 비었을 때 초기 상태 플레이스홀더 화면 복구
+                    self.tree_model.clear()
+                    self.combo_x.clear()
+                    self.combo_x.addItem("Time_[s]")
+                    
+                    placeholder = QStandardItem("💡여기에 .out 파일을 드래그하세요")
+                    placeholder.setSelectable(False)
+                    self.tree_model.appendRow(placeholder)
+                
+                # 3. 우측 Matplotlib 차트 화면도 지워진 데이터를 즉시 반영하여 새로고침
+                self.update_plot()
+
+
+
+
+    def var_tree_context_menu_(self, pos):
+        """ 메뉴를 열기 전에 미리 인덱스를 선점하여 확실하게 낚아채는 함수 """
+        
+        # 메뉴창을 띄우기 '전'에, 현재 마우스 우클릭 좌표 밑에 있는 아이템의 인덱스를 최우선으로 확보합니다.
+        clicked_index = self.var_tree.indexAt(pos)
+        selection_model = self.var_tree.selectionModel()
+        backup_indexes = selection_model.selectedRows()
+        
+        # 만약 마우스 좌클릭 다중 선택을 안 하고, 그냥 특정 항목 위에서 바로 우클릭을 한 경우라면
+        # 방금 마우스 커서가 찌른 그 아이템(clicked_index)을 백업 리스트에 강제로 수집합니다.
+        if not backup_indexes and clicked_index.isValid():
+            backup_indexes = [clicked_index]
+
+        # ------------------------------------------------------------------
+        # 데이터가 안전하게 백업되었으므로 이제 우클릭 팝업 메뉴를 띄웁니다.
+        # ------------------------------------------------------------------
+        context_menu = QMenu(self)
+        remove_action = context_menu.addAction("❌ 선택한 파일/변수 리스트에서 제거")
+        
+        # 마우스 커서 전역 좌표 기준으로 메뉴 열기
+        action = context_menu.exec(self.var_tree.mapToGlobal(pos))
+        
+        if action == remove_action:
+            from PySide6.QtWidgets import QMessageBox
+            
+            # 💡 [핵심 교정 2] 메뉴 실행 후 텅 비어버리는 selectionModel() 대신, 아까 미리 확보해둔 backup_indexes를 사용합니다!
+            if not backup_indexes:
+                QMessageBox.information(self, "안내", "리스트에서 제거할 파일이나 변수를 먼저 마우스로 선택해 주세요.")
+                return
+
+            files_to_remove = set()
+            
+            for index in backup_indexes:
+                # 인덱스로부터 실제 트리 아이템 객체 참조
+                item = self.tree_model.itemFromIndex(index)
+                if not item:
+                    continue
+                
+                # 사용자가 최상위 부모(파일 폴더) 노드를 선택한 경우 순수 파일명 파싱
+                if item.parent() is None:
+                    full_text = item.text().strip()
+                    
+                    # 1. 앞쪽 아이콘/이모지 제거 필터 가동
+                    pure_text = full_text
+                    for char in full_text:
+                        if char.isalnum() or char in ['_', '=', '-', '.']:
+                            pure_text = full_text[full_text.index(char):]
+                            break
+                    
+                    # 2. 뒤쪽 변수 개수 괄호 " (135)" 패턴 완벽 절단 (배열 인덱스 오류 완전 방지)
+                    if " (" in pure_text:
+                        file_title = pure_text.rsplit(" (", 1)[0].strip()
+                    else:
+                        file_title = pure_text.strip()
+                        
+                    files_to_remove.add(file_title)
+                
+                # 사용자가 폴더 내부의 하위 변수 자식 노드를 선택한 경우
+                else:
+                    file_title = item.data(Qt.UserRole + 1)
+                    if file_title:
+                        files_to_remove.add(str(file_title).strip())
+
+            if not files_to_remove:
+                return
+
+            # 💡 [검증 단계] 어떤 파일 이름이 최종적으로 발려나왔는지 대화상자로 표시
+            target_list = ", ".join(list(files_to_remove))
+            reply = QMessageBox.question(
+                self, "파일 제거 확인",
+                f"코드가 인지한 파일명: [ {target_list} ]\n\n"
+                f"선택한 {len(files_to_remove)}개의 파일 세션을 리스트와 백엔드 메모리에서 완전히 삭제하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                # 1. 백엔드 메모리 딕셔너리 데이터 소스에서 타겟 키 일괄 완전 삭제
+                for f_title in files_to_remove:
+                    if f_title in self.data_dict:
+                        del self.data_dict[f_title]
+                        print(f"[🗑️ 삭제 완료] {f_title}")
+                    else:
+                        # 2차 방어선: 대소문자 및 미세 공백 불일치 유연 매칭 청소
+                        matched_key = None
+                        for key in self.data_dict.keys():
+                            if key.lower().strip() == f_title.lower().strip():
+                                matched_key = key
+                                break
+                        if matched_key:
+                            del self.data_dict[matched_key]
+                            print(f"[🗑️ 삭제 완료(유연)] {matched_key}")
+                
+                # 2. 남은 데이터들을 기반으로 좌측 트리뷰 및 X축 컴포넌트 자동 동기화 리셋
+                if self.data_dict:
+                    self.update_ui_components()
+                else:
+                    # 데이터 소스가 텅 비었을 때 초기 상태 플레이스홀더 화면 복구
+                    self.tree_model.clear()
+                    self.combo_x.clear()
+                    self.combo_x.addItem("Time_[s]")
+                    
+                    placeholder = QStandardItem("💡여기에 .out 파일을 드래그하세요")
+                    placeholder.setSelectable(False)
+                    self.tree_model.appendRow(placeholder)
+                
+                # 3. 우측 Matplotlib 차트 화면도 지워진 데이터를 즉시 반영하여 새로고침
+                self.update_plot()
