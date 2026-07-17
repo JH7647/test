@@ -1,11 +1,26 @@
 import os
 from PySide6.QtWidgets import (QWidget, QFormLayout, QLineEdit, QLabel, QTextEdit, 
-                               QPushButton, QHBoxLayout, QVBoxLayout, QSplitter)
+                               QPushButton, QHBoxLayout, QVBoxLayout, QSplitter, QComboBox)
 from PySide6.QtCore import QProcess, Qt
 from src.core.openfast_io import OpenFastIO
 
 # 💡 BaseInputTab 대신 일반 QWidget을 상속받습니다.
 class MainTab(QWidget):
+    MODULE_SWITCHES = {
+        "NRotors":    {"values": ["1"], "desc": "Number of rotors in turbine"},
+        "CompElast":  {"values": ["1", "2", "3"], "desc": "Compute structural dynamics"},
+        "CompInflow": {"values": ["0", "1", "2"], "desc": "Compute inflow wind velocities"},
+        "CompAero":   {"values": ["0", "1", "2", "3"], "desc": "Compute aerodynamic loads"},
+        "CompServo":  {"values": ["0", "1"], "desc": "Compute control/electrical-drive dynamics"},
+        "CompSeaSt":  {"values": ["0", "1"], "desc": "Compute sea state information"},
+        "CompHydro":  {"values": ["0", "1"], "desc": "Compute hydrodynamic loads"},
+        "CompSub":    {"values": ["0", "1", "2"], "desc": "Compute sub-structural dynamics"},
+        "CompMooring":{"values": ["0", "1", "2", "3", "4"], "desc": "Compute mooring system"},
+        "CompIce":    {"values": ["0", "1", "2"], "desc": "Compute ice loads"},
+        "CompSoil":   {"values": ["0", "1"], "desc": "Compute soil-structural dynamics"},
+        "MHK":        {"values": ["0", "1", "2"], "desc": "MHK turbine type"},
+    }
+
     def __init__(self, main_window=None, parent=None):
         super().__init__(parent)
         self.main_window = main_window  # 부모 윈도우 인스턴스 저장
@@ -29,6 +44,67 @@ class MainTab(QWidget):
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 10, 0)
+        
+        module_layout = QHBoxLayout()
+        module_layout.setContentsMargins(0, 0, 0, 0)
+        module_layout.setSpacing(4)
+        
+        self.cmb_module = QComboBox()
+        self.cmb_module.setMinimumHeight(28)
+        self.cmb_module.setStyleSheet("""
+            QComboBox {
+                background-color: #FFFFFF;
+                color: #1F2937;
+                font-size: 12px;
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                padding: 2px 8px;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #FFFFFF;
+                selection-background-color: #D1D5DB;
+                selection-color: #374151;
+                font-size: 12px;
+            }
+        """)
+        
+        self.lbl_module_desc = QLabel("")
+        self.lbl_module_desc.setStyleSheet("""
+            QLabel {
+                color: #374151;
+                font-size: 11px;
+                padding: 2px 4px;
+            }
+        """)
+        self.lbl_module_desc.setWordWrap(True)
+        
+        self.txt_module_val = QLineEdit()
+        self.txt_module_val.setPlaceholderText("Value")
+        self.txt_module_val.setMinimumHeight(28)
+        self.txt_module_val.setMaximumWidth(70)
+        self.txt_module_val.setStyleSheet("""
+            QLineEdit {
+                background-color: #FFFFFF;
+                color: #1F2937;
+                font-size: 12px;
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                padding: 2px 6px;
+            }
+        """)
+        
+        module_layout.addWidget(self.cmb_module, stretch=1)
+        module_layout.addWidget(self.txt_module_val, stretch=0)
+        left_layout.addLayout(module_layout)
+        left_layout.addWidget(self.lbl_module_desc)
+        
+        self._prev_module_val = ""
+        self.cmb_module.currentIndexChanged.connect(self._on_module_selected)
+        self.txt_module_val.textChanged.connect(self._on_module_val_changed)
         
         form_param = QFormLayout()
         
@@ -120,6 +196,8 @@ class MainTab(QWidget):
         main_splitter.setSizes([450, 650])
         main_layout.addWidget(main_splitter)
 
+        self.refresh_module_switches()
+
 
 
     def refresh_ui(self):
@@ -132,6 +210,67 @@ class MainTab(QWidget):
             "TMax": self.txt_tmax.text(),
             "DT": self.txt_dt.text()
         }
+
+    def refresh_module_switches(self):
+        """ 콤보박스 항목을 OpenFastIO.current_config 기준으로 갱신 """
+        self.cmb_module.blockSignals(True)
+        self.txt_module_val.blockSignals(True)
+        
+        self.cmb_module.clear()
+        
+        for key in self.MODULE_SWITCHES:
+            cfg = OpenFastIO.current_config.get(key, {})
+            val = cfg.get("current") or cfg.get("default") or "0"
+            desc = self.MODULE_SWITCHES[key].get("desc", "")
+            self.cmb_module.addItem(f"{key}  ({desc}) : {val}", key)
+        
+        if self.cmb_module.count() > 0:
+            self.cmb_module.setCurrentIndex(self.cmb_module.count() - 1)
+            self._sync_module_ui()
+        
+        self.cmb_module.blockSignals(False)
+        self.txt_module_val.blockSignals(False)
+
+    def _on_module_selected(self, index):
+        """ 콤보박스 선택 변경 시 라인 에딧 및 설명 라벨 동기화 """
+        if index < 0:
+            return
+        self._sync_module_ui()
+
+    def _sync_module_ui(self):
+        index = self.cmb_module.currentIndex()
+        if index < 0:
+            return
+        key = self.cmb_module.itemData(index)
+        cfg = OpenFastIO.current_config.get(key, {})
+        val = cfg.get("current") or cfg.get("default") or "0"
+        desc = self.MODULE_SWITCHES.get(key, {}).get("desc", "")
+        
+        self.txt_module_val.blockSignals(True)
+        self.txt_module_val.setText(val)
+        self.txt_module_val.blockSignals(False)
+        self.lbl_module_desc.setText(desc)
+        self._prev_module_val = val
+
+    def _on_module_val_changed(self, text):
+        """ 라인 에딧 값 변경 시 current_config 반영 """
+        index = self.cmb_module.currentIndex()
+        if index < 0:
+            return
+        key = self.cmb_module.itemData(index)
+        if not key or key not in self.MODULE_SWITCHES:
+            return
+        
+        allowed = self.MODULE_SWITCHES[key]["values"]
+        if text in allowed:
+            OpenFastIO.current_config[key]["current"] = text
+            self._prev_module_val = text
+            self.cmb_module.setItemText(index, f"{key} : {text}")
+        else:
+            self.txt_module_val.blockSignals(True)
+            self.txt_module_val.setText(self._prev_module_val)
+            self.txt_module_val.blockSignals(False)
+
 
     def run_openfast_process(self):
         """ 변수명 매핑 오류를 방지하기 위해 전체 위젯에서 FilesTab 인스턴스를 직접 탐색하여 호출하는 함수 """

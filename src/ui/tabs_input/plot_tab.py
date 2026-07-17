@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QTreeView, QCo
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMenu, QDialog  # QMenu, QDialog 추가
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QGuiApplication
+from PySide6.QtWidgets import QMessageBox, QFileDialog, QTextEdit, QPushButton
 
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -441,6 +442,25 @@ class PlotTab(QWidget):
         elif action == action_popup:
             self.mouseRclick_open_to_window()
 
+    def mouseRclick_menu(self, pos):
+        """ 마우스 우클릭 시 팝업 메뉴를 띄웁니다. """
+        context_menu = QMenu(self)
+        
+        action_copy = context_menu.addAction("📋 그래프 클립보드 복사")
+        action_popup = context_menu.addAction("🖥️ 새 창으로 띄우기")
+        action_export = context_menu.addAction("📄 선택된 데이터 텍스트 출력")
+        
+        # 전역 좌표로 메뉴 실행 후 사용자가 선택한 액션 반환
+        action = context_menu.exec(self.canvas.mapToGlobal(pos))
+        
+        if action == action_copy:
+            self.mouseRclick_copy_to_clipboard()
+        elif action == action_popup:
+            self.mouseRclick_open_to_window()
+        # 🌟 분기 처리문 추가
+        elif action == action_export:
+            self.mouseRclick_export_data()
+
     def mouseRclick_copy_to_clipboard(self):
         """ 현재 그래프를 이미지 파일로 굽어 클립보드에 복사합니다. """
         try:
@@ -602,6 +622,127 @@ class PlotTab(QWidget):
             import traceback
             print(f"Error opening new window: {e}")
             traceback.print_exc() # 짚고 넘어갈 수 있도록 상세 에러 스택 디버그 출력 추가
+
+    def mouseRclick_export_data(self):
+        """ 📄 현재 선택된 트리뷰 항목들의 데이터를 추출하여 텍스트로 출력 및 저장합니다. """
+        try:
+            # 1. 현재 선택된 X축 변수명 가져오기
+            x_col = self.combo_x.currentText()
+            if not x_col:
+                QMessageBox.warning(self, "경고", "선택된 X축 변수가 없습니다.")
+                return
+
+            # 2. 트리뷰에서 선택된 Y축 변수 및 소속 파일 정보 취합 (UserRole 메타데이터 가로채기)
+            src_sel = self.var_tree.selectionModel().selectedRows()
+            if not src_sel:
+                QMessageBox.warning(self, "경고", "트리뷰에서 출력할 Y축 변수를 선택해주세요.")
+                return
+
+            # 파일 그룹별로 선택된 Y축 변수 목록 정리 {file_title: [y_col1, y_col2, ...]}
+            selected_targets = {}
+            for idx in src_sel:
+                y_col = idx.data(Qt.UserRole)
+                file_title = idx.data(Qt.UserRole + 1)
+                
+                if file_title not in selected_targets:
+                    selected_targets[file_title] = []
+                selected_targets[file_title].append(y_col)
+
+            # 3. 데이터 추출 및 텍스트 빌드
+            text_lines = []
+            text_lines.append("==================================================")
+            text_lines.append("       OpenFAST Selected Data Text Export        ")
+            text_lines.append("==================================================")
+
+            # 마지막으로 처리된 파일 이름을 저장해두었다가 기본 저장 파일명 힌트로 사용
+            last_file_title = "OpenFAST" 
+
+            for file_title, y_cols in selected_targets.items():
+                if file_title not in self.data_dict:
+                    continue
+                
+                last_file_title = os.path.splitext(file_title)[0] # 확장자 제거한 이름 추출
+                df, _ = self.data_dict[file_title]
+                
+                text_lines.append(f"\n📁 Source File: {file_title}")
+                
+                # 헤더 라인 작성 (예: Time \t WindVxi \t RotSpeed)
+                headers = [x_col] + y_cols
+                text_lines.append("\t".join(headers))
+                
+                # 시계열 데이터 행 루프 수행
+                for row_idx in range(len(df)):
+                    # X축 변수가 해당 DataFrame에 누락된 경우 예외 처리
+                    if x_col not in df.columns:
+                        text_lines.append(f"❌ Error: X-axis [{x_col}] not found in this file.")
+                        break
+                        
+                    # 공학용 표기법(:.6e)으로 데이터 정밀도 유지 및 정렬 안정화
+                    row_vals = [f"{df[x_col].iloc[row_idx]:.6e}"]
+                    for y_col in y_cols:
+                        if y_col in df.columns:
+                            row_vals.append(f"{df[y_col].iloc[row_idx]:.6e}")
+                        else:
+                            row_vals.append("NaN")
+                    
+                    text_lines.append("\t".join(row_vals))
+                
+                text_lines.append("-" * 50)
+
+            final_text_content = "\n".join(text_lines)
+
+            # 4. 텍스트 표출 전용 다이얼로그(QDialog) 레이아웃 빌드
+            export_win = QDialog(self)
+            export_win.setWindowTitle("Exported Text Viewer")
+            export_win.resize(750, 550)
+            
+            pop_layout = QVBoxLayout(export_win)
+            pop_layout.setContentsMargins(10, 10, 10, 10)
+            
+            # 안내 메시지 추가
+            info_lbl = QLabel("선택된 변수의 데이터가 탭(\t) 구분자 형식으로 추출되었습니다.\n컨텐츠를 복사하거나 파일로 내보낼 수 있습니다.", export_win)
+            pop_layout.addWidget(info_lbl)
+            
+            # 상단에 선언된 QTextEdit 인스턴스 가동
+            text_edit = QTextEdit(export_win)
+            text_edit.setPlainText(final_text_content)
+            text_edit.setReadOnly(True)  # 편집 방지 및 드래그 복사 허용
+            pop_layout.addWidget(text_edit)
+            
+            # 하단 제어 버튼 배치
+            btn_layout = QHBoxLayout()
+            
+            # [기능 1]: 파일 저장 버튼 (QFileDialog 활용)
+            btn_save = QPushButton("💾 텍스트 파일로 저장", export_win)
+            def save_to_file():
+                file_path, _ = QFileDialog.getSaveFileName(
+                    self, "데이터 텍스트 저장", f"{last_file_title}_exported.txt", "Text Files (*.txt);;CSV Files (*.csv);;All Files (*)"
+                )
+                if file_path:
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(text_edit.toPlainText())
+                    QMessageBox.information(self, "완료", "성공적으로 파일이 저장되었습니다.")
+            btn_save.clicked.connect(save_to_file)
+            
+            # [기능 2]: 창 닫기 버튼
+            btn_close = QPushButton("닫기", export_win)
+            btn_close.clicked.connect(export_win.accept)
+            
+            btn_layout.addWidget(btn_save)
+            btn_layout.addWidget(btn_close)
+            pop_layout.addLayout(btn_layout)
+            
+            # 창이 닫힐 때 메모리 해제 설정 및 모달(Modal) 실행
+            export_win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            export_win.exec()
+            
+            print(f"[Success] '{last_file_title}' 외 선택 데이터 텍스트 변환 및 팝업 완료.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "에러 발생", f"데이터를 텍스트로 처리하는 중 오류가 발생했습니다:\n{str(e)}")
+            print(f"[System Error] {str(e)}")
+
+
 
     def var_tree_context_menu(self, pos):
         """ 📁 [최종 완성형] 단일 선택 및 다중 선택(Ctrl/Shift)된 모든 파일 세션을 완벽히 수집하여 지우는 함수 """

@@ -4,6 +4,7 @@ import sys
 import subprocess 
 import json
 import shutil
+import re
 
 from datetime import datetime
 from logging import config
@@ -13,10 +14,15 @@ from PySide6.QtWidgets import QMessageBox, QFileDialog
 from PySide6.QtCore import QPoint, Qt,QSettings, Qt, QPoint, QSettings, QProcess
 from PySide6.QtGui import QStandardItemModel, QStandardItem
 from PySide6.QtWidgets import QTextEdit, QPushButton, QHBoxLayout
+from PySide6.QtGui import QColor, QBrush, QFont, QCursor
+
+
 
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox, QWidget, QVBoxLayout, QTreeView
 
 from src.core.openfast_io import OpenFastIO  # 코어 엔진 임포트
+
+PROGRESS_RE = re.compile(r"Time:\s*(\d+)\s+of\s+(\d+)\s+seconds[^\r\n]*")
 
 class FilesTab(QWidget):
     """ 오직 파일 디렉토리 탐색과 드래그앤드롭 모션, 트리 배지만 책임지는 정석 UI 위젯 """
@@ -27,124 +33,623 @@ class FilesTab(QWidget):
         self.init_ui()
 
     def init_ui(self):
-        """ 🎨 트리뷰 레이아웃 배치 및 이벤트 바인딩 """
+
         self.setAcceptDrops(True)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
+        # 메인 레이아웃: 좌우 2분할 (Horizontal)
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(2, 2, 2, 2) # 좌 상 우 하
+        main_layout.setSpacing(2)
 
-        # 트리뷰 위젯 정의
-        self.tree_view = QTreeView()
-        self.tree_view.setDragEnabled(True)
-        
-        # 🖱️ 마우스 피지컬 이벤트를 이 탭 영역 내부로 안전하게 격리
-        self.tree_view.mousePressEvent = self.tree_press_event
-        self.tree_view.mouseMoveEvent = self.tree_move_event
-        self.tree_view.doubleClicked.connect(self.on_item_double_clicked)
-        
-        self.tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tree_view.customContextMenuRequested.connect(self.on_item_right_clicked)
-        self.tree_view.setHeaderHidden(True)
+        # region : [LEFT SIDE] 대기열 및 상태 관리 영역 
+        # =================================================================
+        left_panel = QVBoxLayout()
+        left_panel.setSpacing(5)
 
-        # 데이터 모델 생성 및 스타일 적용
-        self.tree_model = QStandardItemModel()
-        self.tree_view.setModel(self.tree_model)
-        
-        self.tree_view.setStyleSheet("""
-            QTreeView { border: none; background-color: #FFFFFF; font-size: 14px; }
-            QTreeView::item { padding: 5px 0px; }
-        """)
-
-        layout.addWidget(self.tree_view)
-        
-    # 하단 제어 영역 시작: 버튼 2개 (가로 배열)
-        bottom_container_layout = QHBoxLayout()
-        bottom_container_layout.setSpacing(15) # 버튼 구역과 로그 창 사이의 간격
-
-        left_button_layout = QVBoxLayout()
-        left_button_layout.setSpacing(10)  # Start 버튼과 Stop 버튼 사이의 세로 여백
-
-        # 버튼 A (Start) - 파란색 테두리와 글자 색상 반영
-        self.btn_run_fast = QPushButton("🚀 Start")
-        self.btn_run_fast.setMinimumHeight(45)  # 이미지처럼 두툼하게 높이 설정
-        self.btn_run_fast.setFixedWidth(160)   # 버튼의 고정 가로폭 지정
-        self.btn_run_fast.setStyleSheet("""
-            QPushButton {
-                background-color: #E1F5FE; /* 연한 파스텔 블루 배경 */
-                color: #0284C7;             /* 선명한 파란색 글자 */
-                font-weight: bold;
-                font-size: 14px;
-                border: 1px solid #B3E5FC;  /* 은은한 테두리 */
-                border-radius: 4px;
-            }
-            QPushButton:disabled {
-                background-color: #F3F4F6;
-                color: #9CA3AF;
-                border: 1px solid #E5E7EB;
-            }
-        """)
-        self.btn_run_fast.clicked.connect(self.run_openfast_process)
-        
-        # 버튼 B (Stop) - 이미지처럼 연한 배경에 빨간 점/글자 톤 반영
-        self.btn_stop_fast = QPushButton("🛑 Stop")
-        self.btn_stop_fast.setMinimumHeight(45)
-        self.btn_stop_fast.setFixedWidth(160)
-        self.btn_stop_fast.setStyleSheet("""
-            QPushButton {
-                background-color: #F3F4F6; /* 기본 연한 회색 배경 */
-                color: #4B5563;             /* 부드러운 다크 그레이 글자 */
-                font-weight: bold;
-                font-size: 14px;
-                border: 1px solid #D1D5DB;  
-                border-radius: 4px;
-            }
-            QPushButton:disabled {
-                background-color: #F9FAFB;
-                color: #D1D5DB;
-                border: 1px solid #E5E7EB;
-            }
-        """)
-        self.btn_stop_fast.setEnabled(False)
-        self.btn_stop_fast.clicked.connect(self.stop_openfast_process)
-        
-        left_button_layout.addWidget(self.btn_run_fast)
-        left_button_layout.addWidget(self.btn_stop_fast)
-        bottom_container_layout.addLayout(left_button_layout)
-
-        self.cmd_output = QTextEdit()
-        self.cmd_output.setReadOnly(True)
-        self.cmd_output.setFixedHeight(100)  # 이미지와 유사하게 하단 높이 고정
-        self.cmd_output.setStyleSheet("""
-            QTextEdit {
-                background-color: #F4F5F7;  /* 연한 그레이 배경 */
-                color: #2D3748;             /* 부드러운 다크 차콜 글자색 */
-                font-family: 'Consolas', 'Courier New', monospace;
-                font-size: 13px;
-                border: 1px solid #E2E8F0;  /* 은은한 외곽 테두리 */
-                border-radius: 4px;
-                padding: 10px;
-            }
-        """)
-        self.cmd_output.append("💡 Simulation logs will be displayed.\n")
-        
-        bottom_container_layout.addWidget(self.cmd_output)
-        layout.addLayout(bottom_container_layout)
-
-
+        # 1. Path 정보 (버튼 -> 디렉토리 변경)
         # 레지스트리에서 마지막 세션 복구 자동 가동
         settings = QSettings("JHLEE", "OFA")
         last_fst_path = settings.value("LastFstPath_fst", "")
+
+        current_dir = "" 
+        display_dir = ""
+        
         if last_fst_path and os.path.exists(last_fst_path):
-            self.load_fst_file(last_fst_path)
+            current_dir = os.path.dirname(last_fst_path)
+            display_dir = self.shrink_directory_path(current_dir, max_len=40)
+
+        # 경로 데이터 유무에 따른 최종 텍스트 마킹
+        btn_text = f"📂 {display_dir}" if display_dir else "📂 디렉토리 선택"
+
+        self.btn_change_dir = QPushButton(btn_text)
+        self.btn_change_dir.setMinimumHeight(30)
+        
+        # 마우스를 올렸을 때 뜨는 툴팁에는 '원본(긴) 경로'를 온전히 보여줍니다.
+        if current_dir:
+            self.btn_change_dir.setToolTip(current_dir)
+            
+        self.btn_change_dir.setStyleSheet("""
+            QPushButton {
+                background-color: #F3F4F6;
+                color: #1F2937;
+                font-weight: bold;
+                font-size: 12px;
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                text-align: left;
+                padding-left: 8px;
+            }
+            QPushButton:hover { background-color: #D1D5DB; }
+        """)
+        # 버튼을 클릭했을 때 작동할 이벤트 연결 
+        self.btn_change_dir.clicked.connect(self.btn_change_dir_clicked)
+
+        left_panel.addWidget(self.btn_change_dir)
+        
+        # 2. .fst 파일 list 트리뷰         
+        self.dir_tree_list = QTreeView()  
+        self.dir_tree_list.setHeaderHidden(True)
+        self.dir_tree_list.setRootIsDecorated(False)    
+        self.dir_tree_list.setIndentation(2)           
+        self.dir_tree_list.setExpandsOnDoubleClick(False)
+
+        self.dir_tree_model = QStandardItemModel()   # 새 모델 바인딩
+        self.dir_tree_list.setModel(self.dir_tree_model) # 새 모델 바인딩       
+        self.dir_tree_list.setStyleSheet("""
+            QTreeView { 
+                border: 1px solid #E5E7EB; 
+                background-color: #FFFFFF; 
+                font-size: 12px; 
+            }
+            QTreeView::viewport {
+                background-color: #FFFFFF;
+            }
+            QTreeView::item { 
+                padding: 4px 0px; 
+            }
+            QTreeView::item:hover { 
+                background-color: #F0F9FF; 
+                color: #0369A1;            
+            }
+            /* 💡 [배경색 변경 핵심 와꾸] 
+               마우스로 선택(selected)되는 순간, 스타일시트가 기본 파란색을 가로채어 
+               통일된 연회색(#E5E7EB) 배경과 진한 회색(#374151) 글자색을 100% 촥 채우도록 강제합니다. */
+            QTreeView::item:selected {
+                background-color: #D1D5DB !important; 
+                color: #374151 !important;            
+                font-weight: bold;         
+            }
+        """)
+
+        # 마우스 물리 피지컬 이벤트 격리 바인딩
+        self.dir_tree_list.mousePressEvent = self.on_dir_tree_clicked
+        self.dir_tree_list.doubleClicked.connect(self.on_dir_tree_item_double_clicked)
+        self.dir_tree_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        # self.dir_tree_list.customContextMenuRequested.connect(self.on_dir_tree_item_right_clicked)
+
+        left_panel.addWidget(self.dir_tree_list, stretch=4)
+
+        if last_fst_path and os.path.exists(last_fst_path):
+            self.update_dir_tree_list(last_fst_path)
+
+
+        # 3. Process list 표시 영역
+        left_panel.addWidget(QLabel(" ⚙️ Process list 표시", styleSheet="font-weight: bold; color: #374151;"))
+        
+        # 프로세스 상태 리스트를 표현할 트리뷰 (또는 리스트뷰)
+        self.process_tree_view = QTreeView()
+        self.process_tree_view.setHeaderHidden(True)
+        self.process_tree_list = QStandardItemModel()
+        self.process_tree_view.setModel(self.process_tree_list)
+        self.process_tree_view.setRootIsDecorated(False)
+        self.process_tree_view.setIndentation(0)
+        self.process_tree_view.setStyleSheet("""
+            QTreeView { border: 1px solid #E5E7EB; background-color: #FFFFFF; font-size: 13px; }
+            QTreeView::viewport {
+                background-color: #FFFFFF;
+            }
+            QTreeView::item { padding: 6px 0px; font-weight: bold; }
+            QTreeView::item:selected {
+                background-color: #D1D5DB;
+                color: #374151;
+            }
+        """)
+        left_panel.addWidget(self.process_tree_view, stretch=2)
+
+        self.process_logs = {}       # 💡 {파일경로: "누적 로그 문자열"} 형태로 로그를 보관할 장부
+        self.current_viewing_path = "" # 현재 사용자가 클릭해서 보고 있는 파일 경로 Track
+
+        # Process list 표시 영역 하단에 클릭 이벤트 연결
+        self.process_tree_view.clicked.connect(self.on_process_item_clicked)
+
+        # 좌측 패널 가로 크기 제한 
+        left_container = QWidget()
+        left_container.setLayout(left_panel)
+        left_container.setFixedWidth(260)
+        main_layout.addWidget(left_container)
+
+        # endregion : =====================================================
+
+        # region : [RIGHT SIDE] 파일 경로 상세 정보 및 실행 로그 제어 영역
+        # =================================================================
+        right_panel = QVBoxLayout()
+        right_panel.setSpacing(5)
+
+        # 1. 상단: .fst 파일 path 정보 및 세부 연동 파일 표시 트리뷰
+        current_fst_path = ""
+        display_fst_path = ""
+
+        if last_fst_path and os.path.exists(last_fst_path):
+            current_fst_path = last_fst_path
+            display_fst_path = self.shrink_directory_path(current_fst_path, max_len=100)
+
+        # 경로 데이터 유무에 따른 최종 버튼 마킹 텍스트 분기 처리
+        btn_fst_path_text = f"🚀 {display_fst_path}   -> Run Batch" if display_fst_path else "📂 Drag & Drop, or Select '.fst' File"
+
+        self.btn_fst_path = QPushButton(btn_fst_path_text)
+        self.btn_fst_path.setMinimumHeight(30) 
+        
+        # 실제 유효한 파일 경로가 존재할 때만 툴팁에 원본(긴) 전체 경로를 온전히 뿌려줍니다.
+        if current_fst_path:
+            self.btn_fst_path.setToolTip(current_fst_path)
+            
+        self.btn_fst_path.setStyleSheet("""
+            QPushButton {
+                background-color: #F8FAFC;
+                color: #334155;
+                font-weight: bold;
+                font-size: 12px;
+                border: 1px solid #E2E8F0;
+                border-radius: 6px;
+                text-align: left;
+                padding-left: 12px;
+            }
+            QPushButton:hover { 
+                background-color: #F1F5F9; 
+                border: 1px solid #CBD5E1;
+            }
+        """)
+        # 버튼을 클릭했을 때 작동할 이벤트 연결 
+        self.btn_fst_path.clicked.connect(self.btn_fst_path_clicked)
+
+        right_panel.addWidget(self.btn_fst_path)
+
+        # 2. OpenFAST 모델 구성 정보 표시 트리뷰   
+        self.model_tree_view = QTreeView()
+        self.model_tree_view.setHeaderHidden(True)
+        self.model_tree_view.setRootIsDecorated(True)   
+        self.model_tree_view.setIndentation(20)
+        self.model_tree_view.setExpandsOnDoubleClick(False)
+
+        self.model_tree_model = QStandardItemModel()
+        self.model_tree_view.setModel(self.model_tree_model)
+
+        self.model_tree_view.setStyleSheet("""
+            QTreeView { 
+                border: 1px solid #E5E7EB; 
+                background-color: #FFFFFF; 
+                font-size: 13px; 
+            }
+            QTreeView::viewport {
+                background-color: #FFFFFF;
+            }
+            QTreeView::item { 
+                padding: 5px 0px; 
+            }
+            QTreeView::item:selected {
+                background-color: #D1D5DB !important; 
+                color: #374151 !important;            
+                font-weight: bold;         
+            }
+        """)
+
+        # 마우스 물리 피지컬 이벤트 격리 바인딩
+        self.model_tree_view.mousePressEvent = self.on_model_tree_press_event
+        self.model_tree_view.mouseMoveEvent = self.on_model_tree_move_event
+        self.model_tree_view.doubleClicked.connect(self.on_model_tree_item_double_clicked)
+        self.model_tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.model_tree_view.customContextMenuRequested.connect(self.on_model_tree_item_right_clicked)
+
+        right_panel.addWidget(self.model_tree_view, stretch=4)
+
+        if current_fst_path and os.path.exists(current_fst_path):
+            self.update_model_tree_view(current_fst_path)
+
+
+        # 3. CMD Result 표시 영역
+        right_panel.addWidget(QLabel(" 🔍 Process Result", styleSheet="font-weight: bold; color: #374151;"))
+        
+        # cmd 로그 출력 창 (`QTextEdit`)
+        self.cmd_output = QTextEdit()
+        self.cmd_output.setReadOnly(True)
+        self.cmd_output.setStyleSheet("""
+            QTextEdit {
+                background-color: #FFFFFF; 
+                color: #2D3748;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 13px;
+                border: 1px solid #E5E7EB; /* 좌측 트리뷰 선 색상인 #E5E7EB와 일치 */
+                border-radius: 0px;        /* 테두리 각 지게 통일 */
+                padding: 6px;              /* 좌측 QTreeView::item padding 비율과 매칭 */
+            }
+        """)
+        self.cmd_output.append("💡 Simulation logs will be displayed.\n")
+        right_panel.addWidget(self.cmd_output, stretch=2)
+
+        # 우측 레이아웃 등록
+        right_container = QWidget()
+        right_container.setLayout(right_panel)
+        main_layout.addWidget(right_container, stretch=10)
+        # endregion : =====================================================
+
+
+    def on_dir_tree_item_double_clicked(self, index):
+        """ 📝 좌측 트리 항목을 더블 클릭했을 때 Notepad++로 파일을 즉시 연는 슬롯 """
+        if not index.isValid():
+            return
+
+        print("📂 [FilesTab] Double-click detected on directory tree item.")
+        
+        # 인덱스로부터 데이터 모델 아이템 호출
+        item = self.dir_tree_model.itemFromIndex(index)
+        if not item:
+            return
+            
+        file_path = item.data(Qt.UserRole)
+        
+        npp_path = r"C:\Program Files\Notepad++\notepad++.exe"
+        
+        # 하드디스크에 실제 파일이 존재하는지 검증 (안전핀)
+        if file_path and os.path.exists(file_path):
+            try:
+                # 1. 시스템에 Notepad++ 가 설치되어 있다면 우선적으로 점화
+                if os.path.exists(npp_path):
+                    subprocess.Popen([npp_path, file_path])
+                    print(f"🚀 Notepad++ 오픈 완수: {os.path.basename(file_path)}")
+                else:
+                    # Notepad++ 주소가 없거나 유실 시 Windows 순정 메모장으로 2차 우회 방어
+                    subprocess.Popen(["notepad.exe", file_path])
+                    print(f"📝 Notepad++ 미설치로 기본 메모장 우회 구동: {os.path.basename(file_path)}")
+            except Exception as e:
+                # 예상치 못한 시스템 I/O 에러 발생 시 최종 순정 메모장 강제 복구 가동
+                subprocess.Popen(["notepad.exe", file_path])
+                print(f"⚠️ 에러 발생으로 기본 메모장 강제 우회: {str(e)}")
         else:
-            self.clear_and_show_placeholder()
+            print(f"⚠️ 파일 경로 유효성 검증 실패 또는 실재하지 않음: {file_path}")
 
-    def clear_and_show_placeholder(self):
-        self.tree_model.clear()
-        self.tree_model.appendRow(QStandardItem("💡여기에 .fst 파일을 마우스로 끌어다 놓으세요 (Drag & Drop)"))
+    def on_dir_tree_clicked(self, event):
+        """ 좌측 디렉토리 트리뷰에서 마우스 물리 누름(Press) 이벤트를 가로채어 처리 """
+        
+        # 1. 마우스가 누른 좌표로부터 트리의 인덱스 추출
+        index = self.dir_tree_list.indexAt(event.pos())
+        
+        # 2. QTreeView 본연의 선택 및 하이라이트 모션을 유지하기 위해 부모 이벤트 호출
+        from PySide6.QtWidgets import QTreeView
+        QTreeView.mousePressEvent(self.dir_tree_list, event)
 
-    def load_fst_file(self, file_path):
-        self.tree_model.clear()
+        # 빈 여백이 아닌 실제 파일 항목을 정확히 찍었을 때만 진입
+        if not index.isValid():
+            return
+            
+        item = self.dir_tree_model.itemFromIndex(index)
+        if item:
+            clicked_file_path = item.data(Qt.UserRole)
+            
+            if clicked_file_path and os.path.exists(clicked_file_path):
+                print(f"⚡ [Single Click] 활성화 -> {clicked_file_path}")
+                
+                # 💡 [더블클릭 먹통 및 잔상 버그 동시 해결 완수 핵심 와꾸]
+                # self.update_dir_tree_list() 호출을 과감히 제거합니다! (장부 폭파 차단)
+                # 대신 장부에 이미 생성되어 있는 파일들을 돌면서 '스마트 색상 토글'만 집행합니다.
+                from PySide6.QtGui import QBrush, QColor, QFont
+                
+                for row in range(self.dir_tree_model.rowCount()):
+                    loop_item = self.dir_tree_model.item(row)
+                    if not loop_item:
+                        continue
+                        
+                    loop_path = loop_item.data(Qt.UserRole)
+                    
+                    # 새로 클릭한 타겟 파일인 경우 -> 연회색 강조 적용
+                    if loop_path and loop_path.lower() == clicked_file_path.lower():
+                        loop_item.setBackground(QBrush(QColor("#D1D5DB")))
+                        loop_item.setForeground(QBrush(QColor("#374151")))
+                        font = QFont()
+                        font.setBold(True)
+                        loop_item.setFont(font)
+                    # 이전에 강조되었던 과거의 파일인 경우 -> 깨끗하게 하얀색 원상 복구!
+                    else:
+                        loop_item.setBackground(QBrush(Qt.GlobalColor.transparent))
+                        loop_item.setForeground(QBrush(Qt.GlobalColor.black))
+                        font = QFont()
+                        font.setBold(False)
+                        loop_item.setFont(font)
+
+                # 3. 최신 세션 경로 변수 동기화
+                self.last_fst_path = clicked_file_path
+                
+                # 🎯 [우측 화면 동기화] 우측 상세 구성 정보 트리 실시간 파싱 및 동기화
+                if hasattr(self, 'update_model_tree_view'):
+                    self.update_model_tree_view(clicked_file_path)
+                    
+                    # 🎯 우측 상단 버튼 명세 텍스트 실시간 매칭
+                    short_path = self.shrink_directory_path(clicked_file_path, max_len=100)
+                    self.btn_fst_path.setText(f"🚀 {short_path}   -> Run Batch")
+                
+                # 🎯 [화면 즉시 리프레시] 윈도우 OS 그래픽 엔진 즉시 렌더링 강제 집행
+                from PySide6.QtWidgets import QApplication
+                QApplication.processEvents()
+
+
+    def update_dir_tree_list(self, last_fst_path):
+        """ 📁 지정된 폴더 내부의 모든 .fst 파일만 순수하게 추출하여 좌측 리스트에 바인딩합니다. """
+        # 좌측 트리 리스트를 깨끗하게 비웁니다.
+        self.dir_tree_model.clear()
+        
+        directory_path = ""
+        if last_fst_path and os.path.exists(last_fst_path):
+            directory_path = os.path.dirname(last_fst_path)
+
+        if not os.path.exists(directory_path):
+            return
+            
+        try:
+            files = os.listdir(directory_path)
+            fst_files = [f for f in files if f.lower().endswith('.fst')]
+        except Exception as e:
+            if hasattr(self, 'cmd_output'):
+                self.cmd_output.append(f"❌ 폴더 읽기 실패: {str(e)}\n")
+            return
+
+        # 만약 폴더 내에 .fst 파일이 하나도 없다면 안내 문구를 띄웁니다.
+        if not fst_files:
+            item = QStandardItem("🚫 .fst 파일이 없습니다.")
+            item.setEnabled(False)
+            item.setEditable(False)
+
+            self.dir_tree_model.appendRow(item)
+            return
+
+        for file_name in sorted(fst_files):
+            # 파일 각각의 온전한 절대 경로는 내부 데이터 영역(UserRole)에만 보관합니다.
+            full_path = os.path.join(directory_path, file_name).replace('\\', '/')
+            
+            item = QStandardItem(f"📄 {file_name}")
+            item.setData(full_path, Qt.UserRole)  # 향후 클릭 이벤트 처리용 경로 저장
+            item.setEditable(False) 
+    
+            item.setBackground(QBrush(Qt.GlobalColor.transparent))
+            item.setForeground(QBrush(Qt.GlobalColor.black))
+            # 현재 등록하려는 파일의 절대경로(full_path)가 마지막 세션 파일(last_fst_path)과 완벽히 일치한다면?
+            if last_fst_path and full_path.lower() == last_fst_path.replace('\\', '/').lower():
+                # 🎨 마우스 클릭 스타일시트와 완전히 일치하는 연회색/진한회색 주입
+                item.setBackground(QBrush(QColor("#D1D5DB")))      
+                item.setForeground(QBrush(QColor("#374151")))      
+                font = QFont()
+                font.setBold(True)
+                item.setFont(font)
+
+            self.dir_tree_model.appendRow(item)
+
+    def btn_change_dir_clicked(self):
+        """ 📂 'Path 정보' 버튼을 눌러 새 디렉토리를 물리적으로 선택하는 함수 """
+        # 기존 툴팁에서 기존 경로가 있다면 시작 위치로 재활용
+        old_path = self.btn_change_dir.toolTip()
+        initial_dir = old_path if old_path and os.path.exists(old_path) else ""
+
+        # 사용자에게 폴더 선택 다이얼로그 출력
+        selected_dir = QFileDialog.getExistingDirectory(self, "작업 디렉토리 선택", initial_dir)
+        
+        if selected_dir:
+            # 1. 시스템 슬래시 스타일 통일
+            selected_dir = selected_dir.replace('\\', '/')
+            
+            # 2. 버튼 텍스트 축소본으로 업데이트 및 툴팁 원본 저장
+            shrunk_text = self.shrink_directory_path(selected_dir, max_len=30)
+            self.btn_change_dir.setText(f"📂 {shrunk_text}")
+            self.btn_change_dir.setToolTip(selected_dir)
+            
+            # 3. 해당 폴더 안의 모든 .fst 파일 리스트를 좌측 트리뷰에 업데이트
+            self.update_dir_tree_list(selected_dir)
+
+    @staticmethod
+    def shrink_directory_path(path, max_len=15):
+        """ 경로가 max_len을 넘으면 중간을 '...'으로 생략하는 함수 """
+        if not path or len(path) <= max_len:
+            return path
+        
+        # OS 구분자 기준 분할 (오픈패스트 특성상 슬래시 사용)
+        parts = path.replace('\\', '/').split('/')
+        
+        # 드라이브명(앞)과 현재 폴더명(뒤) 결합
+        head = parts[0] + "/" + parts[1] if len(parts) > 1 else parts[0]
+        tail = parts[-1]
+        
+        # 글자수가 제한을 넘을 경우 중간 조합
+        shrunk = f"{head}/.../{tail}"
+        
+        # 만약 생략한 결과도 너무 길다면 단순 글자수 자르기
+        if len(shrunk) > max_len:
+            return path[:max_len-3] + "..."
+        return shrunk
+
+
+    def btn_fst_path_clicked(self, checked=False):
+        """ 우측 디렉토리 트리뷰에서 마우스 클릭 이벤트를 안전하게 격리 및 OpenFAST 실행 """
+        # QPushButton.clicked 시그널은 마우스 왼쪽 클릭일 때만 기본 트리거됩니다.
+        if hasattr(self, 'dir_tree_list') and self.dir_tree_list is not None:
+            # QCursor를 PySide6 환경에서 정상적으로 작동하도록 좌표 기록
+            self._drag_start_position = self.dir_tree_list.mapFromGlobal(QCursor.pos())
+
+        # 코어 엔진(OpenFastIO) 연동을 고려한 안전한 실행 처리
+        try:
+            # UI 동결(Freeze) 현상을 방지하기 위해 run_openfast_process가 내부적으로 QProcess나 비동기 쓰레드를 사용하는지 확인하는 것이 좋습니다.
+            if hasattr(self, 'run_openfast_process'):
+                self.run_openfast_process()
+            else:
+                # 혹시 함수명이 다르거나 없을 경우를 대비한 예외 처리 예시
+                print("[경고] run_openfast_process 메서드를 찾을 수 없습니다.")
+                
+        except Exception as e:
+            # 에러 발생 시 사용자에게 메시지 박스로 안내 (상단 PySide6 임포트 활용)
+            QMessageBox.critical(self, "오류", f"OpenFAST 연산 실행 중 에러가 발생했습니다:\n{str(e)}")
+
+
+
+    def update_model_tree_view(self, fst_file_path):
+        """ 우측 트리뷰 채우는 최종 연동 함수 """
+        # 1. 우측 트리뷰 장부 깔끔하게 비우기
+        self.model_tree_model.clear()
+        
+        if not fst_file_path or not os.path.exists(fst_file_path):
+            return
+
+        # 2. 레지스트리 세션 복구 및 메인 타이틀 업데이트
+        settings = QSettings("JHLEE", "OFA")
+        settings.setValue("LastFstPath_fst", fst_file_path)
+
+        if hasattr(self, 'main_window') and self.main_window:
+            file_name = os.path.basename(fst_file_path)
+            self.main_window.setWindowTitle(f"OFA : [{file_name}]")
+
+        try:
+            # 제공해주신 클래스 메서드를 직통 호출하여 파싱 완료된 전체 최신 데이터 장부 획득
+            config = OpenFastIO.update_config_from_fst(fst_file_path)
+        except Exception as e:
+            self.cmd_output.append(f"❌ 설정 파일 연쇄 파싱 실패: {str(e)}\n")
+            return
+
+        # Main .fst 파일을 트리 내부의 유일한 최상위 루트 노드로 지정합니다.
+        main_root_item = QStandardItem(f"📁 Main \t: {fst_file_path}")
+        main_root_item.setEditable(False)
+        self.model_tree_model.appendRow(main_root_item)
+        
+        # 모듈 노드를 최상위가 아닌 'main_root_item'의 자식으로 등록하는 헬퍼 함수
+        def add_module_item(display_name, file_name, base_path):
+            abs_path = OpenFastIO.get_absolute_path(base_path, file_name)
+            item = QStandardItem(f"📁 {display_name:<8} : {abs_path}")
+            item.setEditable(False)
+            main_root_item.appendRow(item) # 최상위 장부가 아닌 main_root_item 산하 자식으로 등록
+            return item, abs_path
+
+        def get_val(key):
+            return config.get(key, {}).get("current") or config.get(key, {}).get("default", "")
+
+        # =================================================================
+        # [1] ElastoDyn & BeamDyn 구역 (다단 계층 완벽 교정)
+        # =================================================================
+        comp_elast = int(get_val("CompElast") or 0)
+        
+        if comp_elast == 1 or comp_elast == 2:
+            ed_file = get_val("EDFile")
+            # Main 산하에 Elasto 모듈 노드 등록
+            ed_item, ed_abs_path = add_module_item("Elasto", ed_file, fst_file_path)
+            
+            # ElastoDyn 모드: Elasto 노드 바로 아래에 3개의 Blade 배치
+            if comp_elast == 1:
+                for num in range(1, 4):
+                    bld_file = get_val(f"BldFile({num})")
+                    if bld_file:
+                        bld_path = OpenFastIO.get_absolute_path(ed_abs_path, bld_file)
+                        child = QStandardItem(f"📁 BldFile({num}) \t: {bld_path}")
+                        child.setEditable(False)
+                        ed_item.appendRow(child)
+
+            # BeamDyn 모드: Main -> Elasto -> Beam(num) -> BldFile 형태로 깊이 확장
+            elif comp_elast == 2:
+                for num in range(1, 4):
+                    bdbld_file = get_val(f"BDBldFile({num})")
+                    if bdbld_file:
+                        bd_path = OpenFastIO.get_absolute_path(ed_abs_path, bdbld_file)
+                        bd_item = QStandardItem(f"📁 Beam({num})  \t: {bd_path}")
+                        bd_item.setEditable(False)
+                        ed_item.appendRow(bd_item)  # Elasto 노드의 자식으로 안착
+
+                        # Beam 하위의 개별 BldFile 추적 (각 Beam 파일 경로 기준 해석)
+                        bld_file = get_val("BldFile")
+                        if bld_file:
+                            bld_path = OpenFastIO.get_absolute_path(bd_path, bld_file)
+                            child = QStandardItem(f"📁 BldFile   \t: {bld_path}")
+                            child.setEditable(False)
+                            bd_item.appendRow(child) # Beam 노드의 자식으로 안착
+
+        # =================================================================
+        # [2] AeroDyn 구역
+        # =================================================================
+        comp_aero = int(get_val("CompAero") or 0)
+        if comp_aero > 0:
+            ae_file = get_val("AeroFile")
+            ae_item, ae_abs_path = add_module_item("Aero", ae_file, fst_file_path)
+            
+            for num in range(1, 4):
+                adbl_file = get_val(f"ADBlFile({num})")
+                if adbl_file:
+                    al_path = OpenFastIO.get_absolute_path(ae_abs_path, adbl_file)
+                    child = QStandardItem(f"📁 ADBlFile({num}) \t: {al_path}")
+                    child.setEditable(False)
+                    ae_item.appendRow(child)
+
+            af_lists = config.get("AFFileList", {}).get("current", [])
+            if isinstance(af_lists, list):
+                for num, af_list in enumerate(af_lists, start=1):
+                    child = QStandardItem(f"📁 Air Foil({num}) \t: {af_list}")
+                    child.setEditable(False)
+                    ae_item.appendRow(child)
+
+        # =================================================================
+        # [3] ServoDyn 구역
+        # =================================================================
+        comp_servo = int(get_val("CompServo") or 0)
+        if comp_servo > 0:
+            servo_file = get_val("ServoFile")
+            sv_item, sv_abs_path = add_module_item("Servo", servo_file, fst_file_path)
+            
+            dll_file = get_val("DLL_FileName")
+            if dll_file:
+                dll_path = OpenFastIO.get_absolute_path(sv_abs_path, dll_file)
+                child = QStandardItem(f"📁 DLL_File   \t: {dll_path}")
+                child.setEditable(False)
+                sv_item.appendRow(child)
+
+        # =================================================================
+        # [4] 나머지 독립형 단일 모듈 라인업 (Main의 바로 아래 자식들)
+        # =================================================================
+        independent_modules = [
+            ("CompInflow", "InflowFile", "Inflow"),
+            ("CompSeaSt", "SeaStFile", "SeaSt"),
+            ("CompHydro", "HydroFile", "Hydro"),
+            ("CompSub", "SubFile", "Sub"),
+            ("CompMooring", "MooringFile", "Mooring"),
+            ("CompIce", "IceFile", "Ice"),
+            ("CompSoil", "SoilFile", "Soil")
+        ]
+
+        for comp_key, file_key, display_name in independent_modules:
+            comp_val = int(get_val(comp_key) or 0)
+            if comp_val > 0:
+                f_name = get_val(file_key)
+                if f_name:
+                    add_module_item(display_name, f_name, fst_file_path)
+
+        # =================================================================
+        # ⚡ [트리 화살표 및 초기 접힘 상태 제어 교정]
+        # =================================================================
+        self.model_tree_view.setRootIsDecorated(True)
+        self.model_tree_view.setIndentation(20) 
+        
+        # 💡 최상위 Main 노드 하위만 처음에 깔끔하게 노출되도록 전체 대기 정렬
+        self.model_tree_view.collapseAll()
+        
+        # 💡 첫 실행 시 유저가 Main의 존재를 바로 볼 수 있게 Main 루트만 한 단계 확장해 둡니다.
+        first_index = self.model_tree_model.index(0, 0)
+        self.model_tree_view.expand(first_index)
+
+                
+      
+
+
+    def __load_fst_file_(self, file_path):
+        self.model_tree_model.clear()
         
         # 주소를 Computer Registry에 저장
         settings = QSettings("JHLEE", "OFA")
@@ -156,7 +661,7 @@ class FilesTab(QWidget):
             self.main_window.setWindowTitle(f"OFA : [{file_name}]")
            
         root_item = QStandardItem(f"📁 Main \t: {file_path}")
-        self.tree_model.appendRow(root_item)
+        self.model_tree_model.appendRow(root_item)
         
         config = OpenFastIO.update_config_from_fst(file_path)
 
@@ -273,14 +778,11 @@ class FilesTab(QWidget):
 
             root_item.appendRow(soil_item)
 
-        self.tree_view.collapseAll()
-        self.tree_view.expandToDepth(0)
+        self.model_tree_view.collapseAll()
+        self.model_tree_view.expandToDepth(0)
 
-        with open(file_path + ".debug", "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=4, ensure_ascii=False)    
-            print('Config file was written to f"{file_path}.debug" ')
 
-    # ================= [ 🖱️ 마우스 드래그 앤 드롭 및 클릭 핸들러 ] =================
+
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -307,10 +809,10 @@ class FilesTab(QWidget):
                 msg_box.setDefaultButton(QMessageBox.No)   
 
                 if msg_box.exec() == QMessageBox.Yes:
-                    self.load_fst_file(drop_file_path)
+                    self.update_model_tree_view(drop_file_path)
 
             if not current_main or current_main == drop_file_path:
-                self.load_fst_file(drop_file_path)
+                self.update_model_tree_view(drop_file_path)
 
             return
         
@@ -396,19 +898,20 @@ class FilesTab(QWidget):
                     OpenFastIO.current_config[target_key]["current"] = drop_file_path                    
                 
                 OpenFastIO.current_config = OpenFastIO.read_file(current_main, OpenFastIO.current_config)
-                self.load_fst_file(current_main)
+                self.update_model_tree_view(current_main)
 
 
 
 
-    def tree_press_event(self, event):
+    def on_model_tree_press_event(self, event):
         """ 마우스 클릭 시 클릭한 위치와 항목을 기억하는 함수 """
         if event.button() == Qt.LeftButton:
             self._drag_start_position = event.position().toPoint()
         # 원래 QTreeView의 기본 마우스 클릭 동작도 함께 수행합니다.
-        QTreeView.mousePressEvent(self.tree_view, event)
+        QTreeView.mousePressEvent(self.model_tree_view, event)
 
-    def tree_move_event(self, event):
+
+    def on_model_tree_move_event(self, event):
         """ 마우스를 누른 채 일정 거리 이상 움직이면 외부로 드래그를 시작하는 함수 """
         if not (event.buttons() & Qt.LeftButton):
             return
@@ -448,9 +951,9 @@ class FilesTab(QWidget):
                 # 드래그 시 마우스 커서 모양을 복사(Copy) 형태로 지정하여 수행
                 drag.exec(Qt.CopyAction)
 
-    def on_item_double_clicked(self, index):
+    def on_model_tree_item_double_clicked(self, index):
     # """ 트리 항목을 더블 클릭했을 때 Notepad++로 파일을 여는 함수 """
-        item = self.tree_model.itemFromIndex(index)
+        item = self.model_tree_model.itemFromIndex(index)
         if not item:
             return
             
@@ -474,18 +977,27 @@ class FilesTab(QWidget):
             except FileNotFoundError:
                 subprocess.Popen(["notepad.exe", file_path])
 
-    def on_item_right_clicked(self, pos):
+    def on_model_tree_item_right_clicked(self, pos):
    # 트리 뷰 마우스 우클릭 팝업 메뉴 화면 처리 
         from PySide6.QtWidgets import QMenu
         from PySide6.QtGui import QAction
 
         # 현재 마우스 우클릭을 한 주소의 트리 아이템 인덱스 가져오기
-        index = self.tree_view.indexAt(pos)
+        if not hasattr(self, 'model_tree_view') or self.model_tree_view is None:
+            return
+
+        index = self.model_tree_view.indexAt(pos)
         if not index.isValid():
             return # 빈 바탕을 눌렀다면 메뉴를 띄우지 않고 취소
 
-        item = self.tree_model.itemFromIndex(index)
-        text = item.text()
+        item = self.model_tree_model.itemFromIndex(index)
+        full_text = item.text()
+
+        # "📁 모듈명    : C:/path/file.dat" 형태에서 실제 파일 절대 경로만 깔끔하게 추출
+        if " : " in full_text:
+            text = full_text.split(" : ", 1)[1].strip()
+        else:
+            text = full_text.strip()
 
         menu = QMenu(self)
         menu.setStyleSheet("""
@@ -513,10 +1025,12 @@ class FilesTab(QWidget):
 
         # 마우스 우클릭 시 띄워줄 저장 옵션 액션(메뉴 아이템) 선언
         open_directory_action = QAction("📁 Open Directory", self)
-        save_project_action = QAction("💾 Project Files 복사/저장하기", self)
-        save_runfile_action = QAction("💾 Run Files 복사/저장하기", self)
-        save_as_action = QAction("📝 다른 이름으로 저장하기...", self)
         export_text_action = QAction("📋 파일 절대 경로 텍스트 복사", self)
+
+        save_project_action = QAction("💾 Project Files Deep 복사/저장하기", self)
+        save_runfile_action = QAction("💾 Project Files Soft 복사/저장하기", self)
+        save_as_action = QAction("📝 다른 이름으로 저장하기...", self)
+
         run_openfast_action = QAction("▶️ OpenFAST 실행하기", self)
 
         menu.addAction(open_directory_action)
@@ -529,15 +1043,255 @@ class FilesTab(QWidget):
         menu.addAction(run_openfast_action)
 
         open_directory_action.triggered.connect(lambda:  self.mouse_Rclick_open_directory(text))
-        save_project_action.triggered.connect(lambda:    self.mouse_Rclick_save_project(text))
-        save_runfile_action.triggered.connect(lambda:    self.mouse_Rclick_save_runfile(text))       
-        save_as_action.triggered.connect(lambda:         print(f"[선택] 다른 이름으로 저장하기 target: {text}"))
+        save_project_action.triggered.connect(lambda:    self.mouse_Rclick_save_project_hard(text))
+        save_runfile_action.triggered.connect(lambda:    self.mouse_Rclick_save_project_soft(text))       
+        save_as_action.triggered.connect(lambda:         self.mouse_Rclick_save_file(text))
         export_text_action.triggered.connect(lambda:     print(f"[선택] 절대 경로 복사 target: {text}"))
         run_openfast_action.triggered.connect(lambda:    self.mouse_Rclick_run_openfast(text))
 
-        menu.exec(self.tree_view.mapToGlobal(pos))  # 마우스가 클릭된 전역 좌표(화면 기준 주소)에 메뉴판 오픈
+        menu.exec(self.model_tree_view.mapToGlobal(pos))  # 마우스가 클릭된 전역 좌표(화면 기준 주소)에 메뉴판 오픈
 
     def run_openfast_process(self):
+        """ 🚀 [멀티 러닝 및 개별 로그 관리] 선택된 .fst 파일을 QProcess로 비동기 실행하고 실시간 로그를 수집 """
+        import os
+        from PySide6.QtCore import QProcess, QSettings, Qt
+        from PySide6.QtGui import QStandardItem
+        from PySide6.QtWidgets import QMessageBox
+
+        if not hasattr(self, 'running_processes'):
+            self.running_processes = []
+        if not hasattr(self, 'process_logs'):
+            self.process_logs = {}
+
+        # 💡 UI 셋업 코드에서 정의한 트리뷰 변수명(model_tree_view)과 일치시킵니다.
+        tree_view = self.model_tree_view if hasattr(self, 'model_tree_view') else self.dir_tree_list
+        
+        indexes = tree_view.selectedIndexes()
+        file_path = ""
+
+        # [방어 로직] 트리뷰에서 마우스 선택이 없다면, 레지스트리에 백업된 마지막 fst 경로를 강제로 가져옵니다.
+        if not indexes:
+            settings = QSettings("JHLEE", "OFA")
+            file_path = settings.value("LastFstPath_fst", "")
+            print(f"[정보] 트리뷰 선택이 없어 레지스트리 백업 경로 활용 시도: {file_path}")
+        else:
+            model = indexes[0].model()
+            item_text = model.data(indexes[0])
+            if not item_text:
+                QMessageBox.warning(self, "선택 오류", "선택한 항목의 텍스트 데이터를 읽을 수 없습니다.")
+                return
+            
+            if "📁" in item_text or ":" in item_text:
+                parts = item_text.split(":", 1)
+                if len(parts) > 1:
+                    file_path = parts[1].strip()
+            else:
+                file_path = item_text.strip()
+
+        if not file_path or not file_path.lower().endswith('.fst'):
+            QMessageBox.warning(self, "파일 오류", f"유효한 OpenFAST(.fst) 파일이 확보되지 않았습니다.\n경로: {file_path}")
+            return
+            
+        if not os.path.exists(file_path):
+            QMessageBox.critical(self, "경로 오류", f"해당 .fst 파일이 물리적으로 존재하지 않습니다.\n경로: {file_path}")
+            return
+
+        for p, p_path, _ in self.running_processes:
+            if p_path == file_path:
+                QMessageBox.warning(self, "이미 실행 중", f"해당 파일은 이미 시뮬레이션이 진행 중입니다.")
+                return
+
+        settings = QSettings("JHLEE", "OFA")
+        openfast_path = settings.value("LastOpenFastPath", "")
+        
+        if not openfast_path or not os.path.exists(openfast_path):
+            QMessageBox.warning(self, "엔진 경로 미지정", "OpenFAST 실행 파일(.exe) 경로가 설정되지 않았거나 존재하지 않습니다.\n프로그램 설정에서 openfast.exe 경로를 먼저 등록해 주세요.")
+            return
+
+        working_dir = os.path.dirname(file_path)
+        file_name = os.path.basename(file_path)
+
+        print(f"[실행] OpenFAST 비동기 구동 시도: {file_name} in {working_dir}")
+
+        try:
+            process = QProcess(self)
+            process.setWorkingDirectory(working_dir)
+            
+            self.process_logs[file_path] = f"⏳ [Start] Simulation Started for: {file_name}\n"
+            
+            # 람다식 매핑 연결
+            process.readyReadStandardOutput.connect(lambda p=process, path=file_path: self.handle_ready_read(p, path))
+            process.readyReadStandardError.connect(lambda p=process, path=file_path: self.handle_ready_read(p, path))
+            process.finished.connect(lambda exit_code, exit_status, path=file_path: self.handle_process_finished(path))
+
+            # 💡 작업 디렉토리를 세팅했으므로, 첫 번째 인자로 전체 경로 대신 파일명만 넘겨 상대경로 붕괴를 막습니다.
+            process.start(openfast_path, [file_name])
+
+            if hasattr(self, 'process_tree_list') and self.process_tree_list is not None:
+                status_item = QStandardItem(f"🟢 {file_name} (실행중...)")
+                status_item.setEditable(False)
+                status_item.setData(file_path, Qt.ItemDataRole.UserRole)
+                self.process_tree_list.appendRow(status_item)
+                self.running_processes.append((process, file_path, status_item))
+            
+            if hasattr(self, 'btn_stop_fast') and self.btn_stop_fast:
+                self.btn_stop_fast.setEnabled(True)
+                
+            self.current_viewing_path = file_path
+            self.cmd_output.setText(self.process_logs[file_path])
+            print(f"✅ 프로세스 백그라운드 러닝 진입 성공: {file_name}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "실행 실패", f"OpenFAST 구동 중 시스템 예외가 발생했습니다.\n\n사유: {e}")
+
+    @staticmethod
+    def _render_log(raw):
+        """ OpenFAST 진행률 출력(\\r)을 터미널처럼 같은 줄 덮어쓰기로 정리 """
+        out = []
+        for line in raw.replace('\\r\\n', '\\n').split('\\n'):
+            segs = line.split('\\r')
+            out.append(segs[-1] if segs else '')
+        text = '\\n'.join(out)
+        if text.endswith('\\n'):
+            text = text[:-1]
+        return text
+
+    def _append_log(self, text):
+        """ cmd 출력창에 추가하되, \\r 진행률은 같은 줄을 덮어쓰고 끝의 빈 줄은 제거 """
+        from PySide6.QtGui import QTextCursor
+        text = text.replace('\\r\\n', '\\n')
+        cursor = self.cmd_output.textCursor()
+        cursor.movePosition(QTextCursor.End)
+
+        # 이전 청크가 \\r로 끝났으면 이번 첫 삽입은 현재 줄 맨 앞에서 덮어쓰기
+        at_line_start = getattr(self, '_log_cr_pending', False)
+        self._log_cr_pending = False
+
+        for i, seg in enumerate(text.split('\\r')):
+            if not seg:
+                continue
+            if i == 0 and at_line_start:
+                cursor.movePosition(QTextCursor.StartOfLine)
+                cursor.movePosition(QTextCursor.EndOfLine, QTextCursor.KeepAnchor)
+                cursor.removeSelectedText()
+            cursor.insertText(seg)
+
+        # 이 청크가 \\r로 끝났으면 다음 청크 첫 삽입은 줄 맨 앞에서
+        if text.endswith('\\r'):
+            self._log_cr_pending = True
+
+    def handle_ready_read(self, process, file_path):
+        """ 📥 [실시간 로그 가로채기] 백그라운드 프로세스가 텍스트를 출력할 때마다 메모리에 누적 저장 """
+        from PySide6.QtCore import QByteArray
+
+        # 표준 출력(Stdout)과 에러 출력(Stderr) 버퍼에 쌓인 데이터를 유실 없이 각각 모두 수거
+        stdout_bytes = process.readAllStandardOutput()
+        stderr_bytes = process.readAllStandardError()
+
+        # 두 버퍼의 데이터를 결합 (PySide6 QByteArray는 서로 더할 수 있습니다)
+        combined_bytes = stdout_bytes + stderr_bytes
+        if combined_bytes.isEmpty():
+            return
+
+        # 수집된 바이트 데이터를 문자열로 안전하게 디코딩
+        raw_data = combined_bytes.data()
+        try:
+            text = raw_data.decode('utf-8')
+        except UnicodeDecodeError:
+            text = raw_data.decode('cp949', errors='ignore') # 윈도우 인코딩 예외 처리 안전망
+
+        if not text:
+            return
+
+        # 진행률 파싱 -> 좌측 리스트 항목 갱신 (우측 출력은 원본 그대로 유지)
+        m = PROGRESS_RE.search(text)
+        if m:
+            cur, total = int(m.group(1)), int(m.group(2))
+            pct = (cur / total * 100) if total else 0
+            file_name = os.path.basename(file_path)
+            for _, fpath, item in getattr(self, 'running_processes', []):
+                if fpath == file_path and item is not None:
+                    item.setText(f"🟢 {file_name} ({pct:.0f} %)")
+                    break
+
+        # 전역 로그 장부에 실시간 텍스트 추가
+        if file_path in self.process_logs:
+            self.process_logs[file_path] += text
+        else:
+            self.process_logs[file_path] = text
+
+        # 만약 사용자가 현재 '클릭해서 보고 있는' 프로세스의 로그라면 화면에도 실시간 중계
+        if getattr(self, 'current_viewing_path', None) == file_path:
+            self._append_log(text)
+
+            # 로그가 추가되면 자동으로 스크롤바를 가장 최하단(최신 로그 위치)으로 밀어내기
+            scrollbar = self.cmd_output.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+    def handle_process_finished(self, file_path):
+        """ ⚪ [프로세스 종료 리스너] 연산이 끝난 프로세스의 UI 상태를 변경 """
+        from PySide6.QtCore import QProcess, Qt
+        import os
+        
+        file_name = os.path.basename(file_path)
+        
+        # 로그 장부에 종료 라인 추가
+        if file_path in self.process_logs:
+            self.process_logs[file_path] += f"\n✅ [Finished] Process End : {file_name}\n"
+            
+        # 현재 화면에 떠있는 로그가 종료된 로그라면 완료 문구 표시
+        if getattr(self, 'current_viewing_path', None) == file_path:
+            self.cmd_output.setText(self._render_log(self.process_logs[file_path]))
+            scrollbar = self.cmd_output.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+        # 좌측 리스트 뷰에서 해당 파일을 찾아 상태를 (연산 완료)로 갱신
+        if hasattr(self, 'process_tree_list') and self.process_tree_list is not None:
+            for i in range(self.process_tree_list.rowCount()):
+                item = self.process_tree_list.item(i)
+                if item and item.data(Qt.ItemDataRole.UserRole) == file_path:
+                    item.setText(f"⚪ {file_name} (연산 완료)")
+                    break
+
+        # 활성 프로세스 관리 리스트 동기화
+        if hasattr(self, 'running_processes'):
+            self.running_processes = [item for item in self.running_processes if item[0].state() == QProcess.ProcessState.Running]
+            if not self.running_processes and hasattr(self, 'btn_stop_fast') and self.btn_stop_fast:
+                self.btn_stop_fast.setEnabled(False)
+
+    def on_process_item_clicked(self, index):
+        """ 🎯 [Process List 클릭 이벤트] 리스트에서 항목을 선택하면 보관 중이던 전역 로그를 QTextEdit에 표출 """
+        from PySide6.QtCore import Qt
+        
+        # 클릭한 아이템 객체 획득
+        if not hasattr(self, 'process_tree_list') or self.process_tree_list is not None:
+            item = self.process_tree_list.itemFromIndex(index)
+        else:
+            return
+            
+        if not item:
+            return
+
+        # 내부 메타데이터에서 고유 열쇠인 파일 절대경로 추출
+        file_path = item.data(Qt.ItemDataRole.UserRole)
+        if not file_path:
+            return
+
+        # 1. 현재 보고 있는 대상 경로를 변경
+        self.current_viewing_path = file_path
+
+        # 2. 로그 장부(process_logs)에서 해당 파일의 로그를 찾아 화면에 통째로 갱신
+        if file_path in self.process_logs:
+            self.cmd_output.setText(self._render_log(self.process_logs[file_path]))
+        else:
+            self.cmd_output.setText("💡 선택된 프로세스의 기록된 로그가 존재하지 않습니다.\n")
+
+        # 3. 스크롤바를 가장 최신 로그 위치(맨 아래)로 자동 정렬
+        scrollbar = self.cmd_output.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+
+    def __run_openfast_process(self):
         """ 🚀 [멀티 러닝 지원] 트리뷰에서 선택된 .fst 파일을 독립된 백그라운드 프로세스로 동시 실행하는 함수 """
         
         # 0️⃣ 멀티 프로세스 관리 리스트가 선언되어 있지 않다면 안전하게 동적 생성
@@ -671,7 +1425,8 @@ class FilesTab(QWidget):
             self.btn_stop_fast.setEnabled(False)
             
 
-    def mouse_Rclick_run_openfast(self, text=""):
+
+    def mouse_Rclick_run_openfast_(self, text=""):
         """ 🖱️ [우클릭 전용] 기존 경로를 기반으로 '새 파일 저장' 다이얼로그를 띄우고, 새로 입력되거나 변경된 파일명으로 세션을 저장한 뒤 OpenFAST를 실행합니다. """
 
         # 0️⃣ 멀티 프로세스 관리 리스트 안전 필터링 청소
@@ -780,11 +1535,6 @@ class FilesTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "실행 실패", f"OpenFAST 구동 중 에러가 발생했습니다.\n\n사유: {e}")
 
-   
-
-
-
-   
     def mouse_Rclick_run_openfast_(self, text):   
         """ 우클릭 메뉴에서 'OpenFAST 실행하기'를 선택했을 때 OpenFAST를 실행하는 함수 """
         if hasattr(self, 'main_window') and self.main_window:
@@ -867,13 +1617,14 @@ class FilesTab(QWidget):
     
     def mouse_Rclick_open_directory(self, text):
         """ 우클릭 메뉴에서 'Open Directory'를 선택했을 때 실제 폴더를 열어주는 함수 """
-        if "\t:" not in text:
+    def mouse_Rclick_open_directory(self, text):
+        """ 우클릭 메뉴에서 'Open Directory'를 선택했을 때 실제 폴더를 열어주는 함수 """
+        # 💡 [교정] 이전 단계에서 text를 순수 경로로 정제해 보냈으므로, 문자열 검증 및 스플릿 로직이 필요 없습니다.
+        if not text:
             return
 
-        file_path = text.split(":", 1)[1].strip()
-
-        # 파일 이름 부분만 떼어내고 상위 디렉터리 경로만 추출
-        dir_path = os.path.dirname(file_path)
+        # 이미 순수 절대 경로 상태이므로 바로 디렉터리 경로만 추출합니다.
+        dir_path = os.path.dirname(text)
         
         # 실제 존재하는 경로인지 체크 후 윈도우 파일 탐색기 열기
         if os.path.exists(dir_path):
@@ -885,7 +1636,8 @@ class FilesTab(QWidget):
         else:
             QMessageBox.warning(self, "Warning", f"No directory path was found! \n\n경로: {dir_path}")
 
-    def mouse_Rclick_save_project(self, text):
+
+    def mouse_Rclick_save_project_hard(self, text):
         "Save project files to new folder"
          
         main_fst_path = OpenFastIO.current_config.get("MainFST", {}).get("current")
@@ -1083,46 +1835,59 @@ class FilesTab(QWidget):
                 "Success", 
                 f"총 {copied_files_count}개의 프로젝트 파일이\n[{target_dir}] 폴더로 안전하게 저장되었습니다!"
             )
-
-    def mouse_Rclick_save_runfile(self, text):
-        """ Soft copy """
+ 
+    def mouse_Rclick_save_project_soft(self, text):
+        """ 소프트 카피: 새로운 .fst 파일을 입력받고, 연결된 모든 하위 파일들을 동일 디렉토리에 복사 및 치환 후 리로드 """
+        # 0. 현재 로드된 메인 fst 경로 확보
         main_fst_path = OpenFastIO.current_config.get("MainFST", {}).get("current")
-        if not main_fst_path:
+        if not main_fst_path or not os.path.exists(main_fst_path):
             QMessageBox.critical(self, "Error", "로드된 OpenFAST 설정 파일이 없습니다.")
             return
 
-        # 1. 기존 경로 분석
-        # current_fst_dir = "A0/A1"
         current_fst_dir = os.path.dirname(os.path.abspath(main_fst_path))
-        # parent_dir = "A0"
-        parent_dir = os.path.dirname(current_fst_dir) 
-        # original_version_name = "A1"
-        original_version_name = os.path.basename(current_fst_dir)
+        old_fst_name = os.path.basename(main_fst_path)
+        old_fst_base, _ = os.path.splitext(old_fst_name)
 
-        # 2. 유저에게 새 폴더 이름('신규이름') 입력 받기
+        # 1. 유저에게 새 .fst 파일 저장 경로 및 파일명 입력 받기 (디렉토리 선택 가능)
         today_str = datetime.now().strftime("%Y%m%d")
-        default_new_name = f"{original_version_name}_{today_str}"
+        default_new_fst = f"{old_fst_base}_{today_str}.fst"
+        default_full_path = os.path.join(current_fst_dir, default_new_fst)
         
-        new_folder_name, ok = QInputDialog.getText(
-            self, 
-            "📁 새 프로젝트 생성", 
-            f"현재 버전 [{original_version_name}]을 대체할\n새로운 폴더 이름을 입력하세요:",
-            text=default_new_name
+        file_path_selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "📄 새 메인 파일 저장 위치 및 이름 선택",
+            default_full_path,                # 초기 탐색 디렉토리 및 기본 파일명 지정
+            "OpenFAST 설정 파일 (*.fst)"        # 파일 포맷 필터
         )
         
-        if not ok or not new_folder_name.strip():
+        # 취소 버튼을 누르거나 창을 닫은 경우 종료
+        if not file_path_selected.strip():
             return
 
-        new_folder_name = new_folder_name.strip()
-        # target_dir = "A0/신규이름"
-        target_dir = os.path.join(parent_dir, new_folder_name)
-
-        # 3. 복사 대상 파일 수집 (기존 로직 활용)
-        files_to_copy = []
-        files_to_copy.append(("MainFST", main_fst_path))
+        # 선택된 전체 경로를 기반으로 변수들 재정의
+        final_new_fst_path = os.path.normpath(file_path_selected)
+        new_fst_name = os.path.basename(final_new_fst_path)
+        new_fst_base, _ = os.path.splitext(new_fst_name)
         
+        # 사용자가 메인 .fst 파일을 다른 디렉토리로 선택했을 수 있으므로 하위 파일들이 복사될 타겟 디렉토리를 사용자가 선택한 새 폴더 경로로 업데이트합니다.
+        current_fst_dir = os.path.dirname(final_new_fst_path)
+
+        # 기존 파일과 경로/이름이 완벽히 같으면 덮어쓰기 방지를 위해 종료
+        if os.path.abspath(final_new_fst_path).lower() == os.path.abspath(main_fst_path).lower():
+            QMessageBox.warning(self, "이름 중복", "기존 메인 파일과 완전히 동일한 경로 및 이름입니다. 다른 이름이나 경로를 선택해주세요.")
+            return
+
+        # 2. 복사 대상 하위 파일 수집 (기존 current_config 활용)
+        files_to_copy = [] # (key, 원래절대경로) 저장
+
+        # 소프트 카피 시 고유 확장자(.ela, .aer 등)를 부여하고 물리 이사할 핵심 1차 파일 목록 정의
+        soft_copy_targets = [
+            "EDFile", "AeroFile", "ServoFile", "SeaStFile", "HydroFile", "MooringFile", "SubFile", "IceFile", "SoilFile", "InflowFile"
+        ]        
+
         for key, info in OpenFastIO.current_config.items():
-            if key == "MainFST" or not isinstance(info, dict):
+            # [수정] 수집 대상 Key가 소프트 카피 대상 1차 모듈 리스트에 포함되어 있는지 엄격히 체크
+            if key not in soft_copy_targets or not isinstance(info, dict):
                 continue
             
             raw_value = info.get("current") or info.get("default")
@@ -1138,13 +1903,15 @@ class FilesTab(QWidget):
             for path_item in paths_to_check:
                 if not isinstance(path_item, str) or not path_item.strip():
                     continue
+                # 숫자 파라미터 제외 가드코드
                 if path_item.strip() in ["0", "1", "2", "3"] or path_item.replace('.', '', 1).isdigit():
                     continue
                 if '.' not in os.path.basename(path_item):
                     continue
 
                 if not os.path.isabs(path_item):
-                    resolved_path = os.path.normpath(os.path.join(current_fst_dir, path_item))
+                    # 메인 .fst 파일이 위치한 원본 디렉토리를 기준으로 절대 경로화
+                    resolved_path = os.path.normpath(os.path.join(os.path.dirname(main_fst_path), path_item))
                 else:
                     resolved_path = os.path.normpath(path_item)
 
@@ -1152,67 +1919,315 @@ class FilesTab(QWidget):
                     if (key, resolved_path) not in files_to_copy:
                         files_to_copy.append((key, resolved_path))
 
-        # 4. 경로 치환 및 실제 복사 실행
-        copied_files_count = 0
-        failed_files = []
+        # config 템플릿의 정확한 Key 풀네임을 기준으로 고정 확장자 매핑 정의
+        ext_rules = {
+            "edfile": ".ela",
+            "aerofile": ".aer",
+            "servofile": ".ser",
+            "seastfile": ".sea",
+            "hydrofile": ".hyd",
+            "mooringfile": ".moo",
+            "subfile": ".sub",
+            "icefile": ".ice",
+            "soilfile": ".sol",
+            "inflowfile": ".inf"
+        }
 
+        # 사용자 승인(Accept)을 위한 변경 내용 요약 및 알림창 팝업
+        summary_text = (
+            f"📄 새 메인 파일 경로:\n{final_new_fst_path}\n\n"
+            f"📂 하위 파일 이사 및 확장자 변경 요약:\n"
+        )
+        for key, origin_path in files_to_copy:
+            orig_name = os.path.basename(origin_path)
+            key_lower = str(key).strip().lower()
+            target_ext = ext_rules.get(key_lower, os.path.splitext(orig_name)[1])
+            new_name = f"{new_fst_base}{target_ext}"
+            summary_text += f"• [{key}] {orig_name} ──> {new_name}\n"
+            
+        summary_text += f"\n위 내용대로 물리 복사 및 내부 경로 치환을 진행하시겠습니까?"
+
+        reply = QMessageBox.question(
+            self,
+            "프로젝트 소프트 복사 승인",
+            summary_text,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply == QMessageBox.No:
+            if hasattr(self, 'cmd_output'):
+                self.cmd_output.append("❌ 사용자가 프로젝트 복사 요청을 취소했습니다.\n")
+            return
+  
+
+        # 3. 하위 파일들을 유저가 지정한 새 디렉토리에 새로운 이름 구조로 물리 복사 실행
+        main_replace_map = {}   # 메인 fst 파일 내부 치환용 매핑 테이블
+        sub_replace_map = {}    # 복사된 하위 파일 내부 치환용 매핑 테이블
+        file_copy_pairs = []    # [(원래절대경로, 생성될새절대경로)] -> 물리 복사 실행용
+        failed_files = []
+        
+        total_attempted = 0     # 총 복사 시도 횟수
+        copied_count = 0        # 복사 성공 횟수
+
+        # 1) 이름 및 '새 디렉토리 기준 절대 경로' 조립 단계
         for key, origin_path in files_to_copy:
             try:
-                # 핵심: 기존 "A0/A1"로 시작하는 경로를 "A0/신규이름" 경로로 강제 치환합니다.
-                # 예: "A0/A1/main.fst" -> "A0/신규이름/main.fst"
-                # 예: "A0/A1/HydroData/HydroDyn.dat" -> "A0/신규이름/HydroData/HydroDyn.dat"
-                if origin_path.startswith(current_fst_dir):
-                    relative_to_v1 = os.path.relpath(origin_path, current_fst_dir)
-                    destination_path = os.path.join(target_dir, relative_to_v1)
-                else:
-                    # 만약 A0/A1 내부가 아니라 아예 외부 파일이라면 원래 이름 구조를 유지하여 새 폴더 하위에 복사
-                    destination_path = os.path.join(target_dir, os.path.basename(origin_path))
-
-                # 복사할 하위 디렉토리가 새 폴더 내에 없다면 생성 (예: HydroData 폴더 생성)
-                dest_subdir = os.path.dirname(destination_path)
-                if not os.path.exists(dest_subdir):
-                    os.makedirs(dest_subdir)
-
-                # 파일 물리 복사
-                shutil.copy2(origin_path, destination_path)
-                copied_files_count += 1
-
-            except Exception as e:
-                failed_files.append(f"{os.path.basename(origin_path)} ({e})")
-
-        # 5. 결과 알림 팝업 및 폴더 열기
-        if failed_files:
-            summary = "\n".join(failed_files)
-            QMessageBox.warning(
-                self, 
-                "Warning", 
-                f"{copied_files_count}개 파일 복사 완료.\n\n⚠️ 일부 파일 복사 실패:\n{summary}"
-            )
-        else:
-            # 성공 안내 메시지 박스
-            QMessageBox.information(
-                self, 
-                "Success", 
-                f"성공적으로 원래 버전 [{original_version_name}] 구조를 복제하여\n"
-                f"[{target_dir}] 폴더로 안전하게 저장했습니다!"
-            )
-            
-            # [신규 추가] 저장 완료된 신규 디렉토리 자동 오픈 로직
-            import platform
-            import subprocess
-            
-            try:
-                target_dir = os.path.normpath(target_dir) # 경로 포맷 청소
-                system_os = platform.system()
+                orig_basename = os.path.basename(origin_path)
+                orig_base, orig_ext = os.path.splitext(orig_basename)
                 
-                if system_os == "Windows":
-                    os.startfile(target_dir)
-                elif system_os == "Darwin":  # macOS
-                    subprocess.run(["open", target_dir], check=True)
-                else:  # Linux
-                    subprocess.run(["xdg-open", target_dir], check=True)
+                key_lower = str(key).strip().lower()
+                target_ext = ext_rules.get(key_lower, orig_ext)
+
+                # 유저가 새로 지정한 폴더(current_fst_dir) 내부에 고유 파일명 결합, 예: HD_P1SS_Cd0_H20_20260711.ela 형태로 이름 빌드
+                new_sub_basename = f"{new_fst_base}{target_ext}"
+                destination_path = os.path.normpath(os.path.join(current_fst_dir, new_sub_basename))
+
+                # 물리 복사 대기열 등록
+                file_copy_pairs.append((origin_path, destination_path))
+                total_attempted += 1
+
+                # OpenFAST 설정 정보 추출 및 안전 다중 매핑 빌드
+                raw_info = OpenFastIO.current_config.get(key, {})
+                raw_text_path = raw_info.get("current") or raw_info.get("default")
+
+                if isinstance(raw_text_path, str) and raw_text_path.strip():
+                    cleaned_raw = raw_text_path.strip().strip("'\"")
                     
-                print(f"📂 신규 프로젝트 디렉토리 오픈 완료: {target_dir}")
-                
+                    # [단순화] 원본 경로가 어떻게 적혀있든 간에 '새 순수 파일명'으로 교체하도록 등록
+                    main_replace_map[cleaned_raw] = new_sub_basename
+                    main_replace_map[cleaned_raw.replace("/", "\\")] = new_sub_basename
+                    
+                    sub_replace_map[cleaned_raw] = new_sub_basename
+                    sub_replace_map[cleaned_raw.replace("/", "\\")] = new_sub_basename
+
+                # 패턴 B 백업 가드: 오직 1차 핵심 모듈 파일일 때만 순수 파일명 단독 치환 허용
+                if key_lower in ext_rules:
+                    main_replace_map[orig_basename] = new_sub_basename
+                    main_replace_map[orig_basename.replace("/", "\\")] = new_sub_basename
+
             except Exception as e:
-                print(f"⚠️ 디렉토리를 열 수 없습니다: {e}")
+                failed_files.append(f"{os.path.basename(origin_path)} (이름 조립 실패: {e})")
+
+        # 2) [물리 복사 단계] 대기열에 있는 파일들을 유저가 지정한 새 디렉토리에 실제로 복사합니다. (유지)
+        print("\n" + "📂"*5 + " [파일 물리 복사 진행 현황] " + "📂"*5)
+        for src_path, dst_path in file_copy_pairs:
+            src_name = os.path.basename(src_path)
+            dst_name = os.path.basename(dst_path)
+            try:
+                shutil.copy2(src_path, dst_path)
+                copied_count += 1
+                print(f"  [성공] {src_name} ──> {os.path.dirname(dst_path)} 폴더 내 {dst_name}")
+            except Exception as e:
+                failed_files.append(f"{src_name} ──> {dst_name} (복사 실패: {e})")
+        print("="*50 + "\n")
+
+
+
+        # 4. 생성된 모든 파일(새 .fst 및 모든 새 하위 파일)의 내부 텍스트 전체 치환 연동
+        target_files_to_modify = [final_new_fst_path] + [dst for _, dst in file_copy_pairs if os.path.exists(dst)]
+        
+        # 글자 수가 긴 원본 문자열 경로 패턴부터 정렬하여 변환 꼬임/치환 깨짐 방지
+        sorted_main_names = sorted(main_replace_map.keys(), key=len, reverse=True)
+        sorted_sub_names = sorted(sub_replace_map.keys(), key=len, reverse=True)
+
+        # 원본 메인 fst의 내용을 복사하여 새 메인 fst 파일을 기초 생성
+        try:
+            with open(main_fst_path, 'r', encoding='utf-8', errors='ignore') as f:
+                main_content = f.read()
+            with open(final_new_fst_path, 'w', encoding='utf-8') as f:
+                f.write(main_content)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"새 메인 파일 기초 생성 실패: {e}")
+            return
+
+        # 모든 대상 파일들을 순회하며 내부 텍스트 안의 모든 옛날 경로들을 새 폴더 경로로 정밀 치환
+        for file_path in target_files_to_modify:
+            try:
+                # 현재 수정 중인 파일이 메인 .fst 인지 구분하는 가드 플래그
+                is_main_fst = (os.path.abspath(file_path).lower() == os.path.abspath(final_new_fst_path).lower())
+
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+
+                modified = False
+                
+                # 파일 종류에 맞는 정밀 매핑 테이블 스위칭 체계 적용
+                loop_names = sorted_main_names if is_main_fst else sorted_sub_names
+                active_map = main_replace_map if is_main_fst else sub_replace_map
+
+                if not is_main_fst:
+                    current_sub_basename = os.path.basename(file_path) # 현재 수정 중인 파일명 (예: Main...aer)
+                    filtered_loop_names = []
+                    
+                    # 현재 파일에 해당하는 원본 1차 모듈 파일명(예: AeroDyn.dat)을 추적합니다.
+                    matched_orig_base = ""
+                    for src, dst in file_copy_pairs:
+                        if os.path.basename(dst) == current_sub_basename:
+                            matched_orig_base = os.path.basename(src) # AeroDyn.dat 확보
+                            break
+                            
+                    for name in loop_names:
+                        # 검사 단어 장부에 자기 자신 모듈의 파일명이 포함되어 있다면 과감히 제외시킵니다.
+                        if matched_orig_base and matched_orig_base in name:
+                            continue
+                        filtered_loop_names.append(name)
+                    loop_names = filtered_loop_names
+
+
+                for old_sub in loop_names:
+                    # 빈 문자열 치환 방지 가드코드
+                    if not old_sub.strip():
+                        continue
+                        
+                    if old_sub in content:
+                        new_sub = active_map[old_sub]
+                        content = content.replace(old_sub, new_sub)
+                        modified = True
+
+                if modified:
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+
+            except Exception as e:
+                if hasattr(self, 'cmd_output'):
+                    self.cmd_output.append(f"⚠️ 경고: {os.path.basename(file_path)} 파일 내부 치환 중 오류 발생: {e}\n")
+
+
+
+        # 5. [핵심] 가상 엔진 데이터 동기화 및 트리뷰 자동 리로드
+        try:
+            if hasattr(self, 'update_model_tree_view'):
+                self.update_model_tree_view(final_new_fst_path)
+                
+                # 수집된 총 개수 정의
+                total_collected = len(files_to_copy)
+                
+                # [조건문] 수집된 개수와 실제 복사 성공한 개수가 완벽히 일치할 때 (전원 성공)
+                if total_collected == copied_count:
+                    QMessageBox.information(
+                        self, 
+                        "✨ Success", 
+                        f"하이브리드 프로젝트 복사 완료!\n\n"
+                        f"• 새 메인 파일: {new_fst_name}\n"
+                        f"• 복사 성공: {copied_count} / {total_collected} 개\n\n"
+                        f"현재 파일 트리가 새 프로젝트 세션으로 리로드되었습니다."
+                    )
+                # 하나라도 누락되거나 다를 때 (일부 실패 또는 예외 발생)
+                else:
+                    error_details = "\n".join(failed_files) if failed_files else "알 수 없는 전송 누락"
+                    QMessageBox.warning(
+                        self, 
+                        "⚠️ Warning", 
+                        f"프로젝트 복사 중 누락 발생!\n\n"
+                        f"• 새 메인 파일: {new_fst_name}\n"
+                        f"• 복사 성공: {copied_count} / {total_collected} 개\n\n"
+                        f"일부 하위 파일 처리 중 오류가 발생했습니다:\n{error_details}"
+                    )
+            else:
+                if hasattr(self, 'cmd_output'):
+                    self.cmd_output.append("⚠️ 알림: load_fst_file 메서드를 찾을 수 없어 자동 리로드를 건너뜜.\n")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"프로젝트 리로드 중 오류 발생: {e}")
+
+    def mouse_Rclick_save_file(self, text):
+        """ Save File with new name & update the tree path"""
+
+        file_path_preset = text.split(":", 1)[1].strip()
+        default_dir = os.path.dirname(file_path_preset)
+        default_name = os.path.basename(file_path_preset)  
+        initial_path = os.path.join(default_dir, default_name)
+        _, ext = os.path.splitext(default_name)
+
+        filter_name = ext.strip('.').lower()
+
+        # 새 파일 저장/생성 다이얼로그 띄우기 ([저장] 버튼으로 출력됨)
+        final_file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Make New File with your input",
+            initial_path,
+            f"{filter_name} Files (*{ext});;All Files (*)",
+            options=QFileDialog.Option.DontConfirmOverwrite  # 👈 시스템 경고창 팝업을 강제로 발생시키지 않는 플래그
+        )
+
+        # 유저가 취소 버튼을 누르면 프로세스 가동 없이 즉시 종료
+        if not final_file_path:
+            return  
+
+        final_file_path = os.path.abspath(final_file_path) # 절대 경로 표준화
+        preset_abs_path = os.path.abspath(file_path_preset)
+
+        # 파일 변경(새로 만들기) 여부 체크 및 분기 처리
+        if final_file_path == preset_abs_path:
+            # 이름을 변경하지 않고 기존 파일명 그대로 저장을 눌렀을 때의 처리
+            reply = QMessageBox.warning(self, "파일 이름 미변경", "기존 파일과 동일한 이름이므로 파일을 새로 만들지 않습니다." )
+            return
+
+        else:
+            # 새로운 파일명이 입력되었을 때 -> 트리뷰 구조를 새 파일 이름으로 자동 갱신 및 저장
+            try:
+                if os.path.exists(preset_abs_path) and not os.path.exists(final_file_path):
+                    import shutil
+                    shutil.copy(preset_abs_path, final_file_path) # 기존 뼈대 파일 복사 생성
+            except Exception as e:
+                self.cmd_output.append(f"⚠️ 새 파일 물리 생성 중 알림: {e}\n")
+
+            if final_file_path.lower().endswith('.fst'):
+                if hasattr(self, 'load_fst_file'):
+                    self.load_fst_file(final_file_path)
+                    self.cmd_output.append(f"✨ 새로운 세션이 생성되고 파일트리 업데이트 되었습니다: {os.path.basename(final_file_path)}")
+            else :
+                # file layer -> Update .fst -> reload tree a.t. Upated .fst
+                try:
+                    # 현재 GUI에 로드된 메인 (.fst) 파일 경로 가져오기
+                    fst_path = OpenFastIO.current_config.get("MainFST", {}).get("current")
+                    if not fst_path:
+                        QMessageBox.critical(self, "Error", "로드된 OpenFAST 설정 파일이 없습니다.")
+                        return
+
+                    if not fst_path or not os.path.exists(fst_path):
+                        # 만약 변수가 없다면 이미지 구조에 따라 Main 노드의 텍스트 등에서 파싱하는 로직이 필요합니다.
+                        self.cmd_output.append("⚠️ 오류: 업데이트할 메인 (.fst) 파일 경로를 찾을 수 없습니다.\n")
+                        return
+
+                    # 메인 (.fst) 파일 내부 텍스트 읽기
+                    with open(fst_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = f.readlines()
+
+                    # .fst 내용 중 기존 하위 파일 경로(상대경로 또는 파일명)를 새 파일 경로로 교체
+                    # OpenFAST 파일 특성상 상대 경로 처리를 위해 basename 위주로 매칭하거나 전체 경로 매칭을 시도합니다.
+                    old_name = os.path.basename(file_path_preset)
+                    new_name = os.path.basename(final_file_path)
+                    
+                    updated = False
+                    new_lines = []
+                    for line in lines:
+                        # 기존 파일명이 포함된 라인이 있다면 새 파일명으로 교체 (따옴표 고려)
+                        if old_name in line:
+                            line = line.replace(old_name, new_name)
+                            updated = True
+                        new_lines.append(line)
+
+                    # 변경된 내용을 메인 (.fst) 파일에 다시 저장
+                    if updated:
+                        with open(fst_path, 'w', encoding='utf-8') as f:
+                            f.writelines(new_lines)
+                        self.cmd_output.append(f"📝 메인 파일({os.path.basename(fst_path)}) 내부의 경로가 업데이트 되었습니다.")
+                    else:
+                        self.cmd_output.append("⚠️ 알림: 메인 파일 내부에서 기존 파일의 레퍼런스를 찾지 못했습니다.")
+
+                    # 변경된 메인 (.fst) 파일을 다시 불러와 트리뷰 전체 리로드
+                    if hasattr(self, 'load_fst_file'):
+                        self.load_fst_file(fst_path)
+                        self.cmd_output.append(f"🔄 하위 파일 변경에 따라 파일트리가 재동기화 되었습니다: {new_name}")
+                        
+                except Exception as e:
+                    self.cmd_output.append(f"⚠️ 하위 파일 링크 업데이트 중 오류 발생: {e}\n")
+
+
+
+
+
+
+

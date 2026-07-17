@@ -12,6 +12,7 @@ from src.ui.tabs_input.main_tab import MainTab
 from src.ui.tabs_input.files_tab import FilesTab
 from src.ui.tabs_input.aero_tab import AeroTab
 from src.ui.tabs_input.plot_tab import PlotTab
+from src.ui.tabs_input.wind_tab import WindTab
 from src.core.openfast_io import OpenFastIO
 
 class MainWindow(QMainWindow):
@@ -45,13 +46,14 @@ class MainWindow(QMainWindow):
         self.pane_main = MainTab(main_window=self)
         self.pane_aero = AeroTab()
         self.pane_plot = PlotTab()
+        self.pane_wind = WindTab()
         
         # 메인 프레임 레이아웃에 탭 순차 바인딩
         self.tab_widget.addTab(self.pane_files, "📁 Files")
         self.tab_widget.addTab(self.pane_main, "⚙️ Main")
         self.tab_widget.addTab(self.pane_plot, "📊 Plot Data")    
         self.tab_widget.addTab(self.pane_aero, "🦅 AeroDyn")    
-        # self.tab_widget.addTab(self.tab_inflow, "💨 InFlow")
+        self.tab_widget.addTab(self.pane_wind, "💨 Wind")
         # self.tab_widget.addTab(self.tab_elasto, "💪 Elasto")
         # self.tab_widget.addTab(self.tab_servo, "🔌 Servo")
         # self.tab_widget.addTab(self.tab_seast, "🌊 SeaSt")
@@ -72,7 +74,8 @@ class MainWindow(QMainWindow):
         settings = QSettings("JHLEE", "OFA")
         last_fst_path = settings.value("LastFstPath_fst", "")
         if last_fst_path and os.path.exists(last_fst_path):
-            self.pane_files.load_fst_file(last_fst_path)
+            self.pane_files.update_model_tree_view(last_fst_path)
+#            self.pane_files.load_fst_file(last_fst_path)
 
     def is_simulation_running(self):
         """ 현재 프로그램 전체에서 OpenFAST가 실행 중인지 체크 """
