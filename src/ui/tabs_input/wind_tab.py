@@ -30,4 +30,5 @@ class WindTab(QWidget):
         """ 📁 기본 데이터를 확인하고 로드하는 메서드 """
         # TODO: Implement default data loading logic here
         print("Checking and loading default wind data...")
+
         pass

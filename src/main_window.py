@@ -65,6 +65,8 @@ class MainWindow(QMainWindow):
 
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
 
+        self._current_tab_index = self.tab_widget.currentIndex()
+
         placeholder_item = QStandardItem("💡여기에 .fst 파일을 마우스로 끌어다 놓으세요 (Drag & Drop)")
         self.tree_model.appendRow(placeholder_item)
         
@@ -87,23 +89,15 @@ class MainWindow(QMainWindow):
         return False
     
     def on_tab_changed(self, index):
-        """ 사용자가 탭을 전환했을 때 자동으로 최신 .out 데이터를 로드하는 함수 """
-        
-        # 사용자가 클릭한 탭의 이름이 "📊 Plot Data" 인지 확인
-        if self.tab_widget.tabText(index) == "📊 Plot Data":
-            # 1. 현재 로드되어 시뮬레이션에 쓰인 .fst 파일 경로 가져오기
-            fst_path = OpenFastIO.current_config.get("MainFST", {}).get("current", "").strip()
-            
-            if fst_path and os.path.exists(fst_path):
-                # 2. .fst 확장자를 .out 확장자로 자동 변경하여 결과 파일 경로 예측
-                # 예: C:/Test/Main.fst -> C:/Test/Main.out
-                base_path, _ = os.path.splitext(fst_path)
-                out_file_path = base_path + ".out"
-                
-                # 3. 만약 예측한 결과 파일(.out)이 실제로 물리적인 폴더 내에 존재한다면
-                if os.path.exists(out_file_path):
-                    # 4. 안전 검증 후 PlotTab의 파싱 함수를 다이렉트로 강제 호출 및 새로고침
-                    if hasattr(self, 'pane_plot') and hasattr(self.pane_plot, 'load_output_data'):
-                        self.pane_plot.load_output_data(out_file_path)
-                else:
-                    print(f"⚠️ [OFA 경고] 결과 파일이 존재하지 않아 로드할 수 없습니다")
+        """ 사용자가 탭을 전환했을 때 각 탭의 enter/leave 훅을 호출 """
+        old_index = self._current_tab_index
+        self._current_tab_index = index
+
+        old_widget = self.tab_widget.widget(old_index)
+        new_widget = self.tab_widget.widget(index)
+
+        if old_widget and hasattr(old_widget, "on_tab_leave"):
+            old_widget.on_tab_leave()
+
+        if new_widget and hasattr(new_widget, "on_tab_enter"):
+            new_widget.on_tab_enter()

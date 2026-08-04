@@ -1,24 +1,40 @@
 import os
 from PySide6.QtWidgets import (QWidget, QFormLayout, QLineEdit, QLabel, QTextEdit, 
                                QPushButton, QHBoxLayout, QVBoxLayout, QSplitter, QComboBox)
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QComboBox, QMessageBox
 from PySide6.QtCore import QProcess, Qt
 from src.core.openfast_io import OpenFastIO
 
-# 💡 BaseInputTab 대신 일반 QWidget을 상속받습니다.
 class MainTab(QWidget):
     MODULE_SWITCHES = {
-        "NRotors":    {"values": ["1"], "desc": "Number of rotors in turbine"},
-        "CompElast":  {"values": ["1", "2", "3"], "desc": "Compute structural dynamics"},
-        "CompInflow": {"values": ["0", "1", "2"], "desc": "Compute inflow wind velocities"},
-        "CompAero":   {"values": ["0", "1", "2", "3"], "desc": "Compute aerodynamic loads"},
-        "CompServo":  {"values": ["0", "1"], "desc": "Compute control/electrical-drive dynamics"},
-        "CompSeaSt":  {"values": ["0", "1"], "desc": "Compute sea state information"},
-        "CompHydro":  {"values": ["0", "1"], "desc": "Compute hydrodynamic loads"},
-        "CompSub":    {"values": ["0", "1", "2"], "desc": "Compute sub-structural dynamics"},
-        "CompMooring":{"values": ["0", "1", "2", "3", "4"], "desc": "Compute mooring system"},
-        "CompIce":    {"values": ["0", "1", "2"], "desc": "Compute ice loads"},
-        "CompSoil":   {"values": ["0", "1"], "desc": "Compute soil-structural dynamics"},
-        "MHK":        {"values": ["0", "1", "2"], "desc": "MHK turbine type"},
+        "CompElast":  {"values": ["1", "2", "3"], "desc": "1=ElastoDyn; 2=BeamDyn; 3=Simplified ElastoDyn"},
+        "CompInflow": {"values": ["0", "1", "2"], "desc": "0=still air; 1=InflowWind; 2=external from ExtInflow"},
+        "CompAero":   {"values": ["0", "1", "2", "3"], "desc": "0=None; 1=AeroDisk; 2=AeroDyn; 3=ExtLoads"},
+        "CompServo":  {"values": ["0", "1"], "desc": "0=None; 1=ServoDyn"},
+        "CompSeaSt":  {"values": ["0", "1"], "desc": "0=None; 1=SeaState"},
+        "CompHydro":  {"values": ["0", "1"], "desc": "0=None; 1=HydroDyn"},
+        "CompSub":    {"values": ["0", "1", "2"], "desc": "0=None; 1=SubDyn; 2=External Platform MCKF"},
+        "CompMooring":{"values": ["0", "1", "2", "3", "4"], "desc": "0=None; 1=MAP++; 2=FEAMooring; 3=MoorDyn; 4=OrcaFlex"},
+        "CompIce":    {"values": ["0", "1", "2"], "desc": "0=None; 1=IceFloe; 2=IceDyn"},
+        "CompSoil":   {"values": ["0", "1"], "desc": "0=None; 1=SoilDyn"},
+    }
+    INITIAL_CONDITIONS = {
+        "OoPDefl":   "out-of-plane blade-tip displacement (meters)",
+        "IPDefl":    "in-plane blade-tip deflection (meters)",
+        "BlPitch(1)": "Blade 1 pitch (degrees)",
+        "BlPitch(2)": "Blade 2 pitch (degrees)",
+        "BlPitch(3)": "Blade 3 pitch (degrees)",
+        "Azimuth":   "Azimuth angle for blade 1 (degrees)",
+        "RotSpeed":  "Rotor speed (rpm)",
+        "NacYaw":    "Nacelle-yaw angle (degrees)",
+        "TTDspFA":   "Fore-aft tower-top displacement (meters)",
+        "TTDspSS":   "Side-to-side tower-top displacement (meters)",
+        "PtfmSurge": "Surge translational displacement (meters)",
+        "PtfmSway":  "Sway translational displacement (meters)",
+        "PtfmHeave": "Heave translational displacement (meters)",
+        "PtfmRoll":  "Roll rotational displacement (degrees)",
+        "PtfmPitch": "Pitch rotational displacement  (degrees)",
+        "PtfmYaw":   "Yaw rotational displacement (degrees)",
     }
 
     def __init__(self, main_window=None, parent=None):
@@ -27,6 +43,11 @@ class MainTab(QWidget):
         
         # 가상의 데이터 저장소 역할 (기존 부모가 제공하던 data_store 대응용)
         self.data_store = {} 
+        self._original_switches = {}
+        self._original_ic = {}
+        self._original_tmax = ""
+        self._original_dt = ""
+        self._dirty = False
         
         # 최초 1회 화면 구조를 완벽하게 조립합니다.
         self.init_ui()
@@ -44,10 +65,13 @@ class MainTab(QWidget):
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 10, 0)
+        left_layout.setSpacing(3)
+        
+        left_layout.addWidget(QLabel("<h3><b>⚙️ Module Select</b></h3>"))
         
         module_layout = QHBoxLayout()
         module_layout.setContentsMargins(0, 0, 0, 0)
-        module_layout.setSpacing(4)
+        module_layout.setSpacing(3)
         
         self.cmb_module = QComboBox()
         self.cmb_module.setMinimumHeight(28)
@@ -72,22 +96,11 @@ class MainTab(QWidget):
             }
         """)
         
-        self.lbl_module_desc = QLabel("")
-        self.lbl_module_desc.setStyleSheet("""
-            QLabel {
-                color: #374151;
-                font-size: 11px;
-                padding: 2px 4px;
-            }
-        """)
-        self.lbl_module_desc.setWordWrap(True)
-        
-        self.txt_module_val = QLineEdit()
-        self.txt_module_val.setPlaceholderText("Value")
-        self.txt_module_val.setMinimumHeight(28)
-        self.txt_module_val.setMaximumWidth(70)
-        self.txt_module_val.setStyleSheet("""
-            QLineEdit {
+        self.cmb_value = QComboBox()
+        self.cmb_value.setMinimumHeight(28)
+        self.cmb_value.setMaximumWidth(70)
+        self.cmb_value.setStyleSheet("""
+            QComboBox {
                 background-color: #FFFFFF;
                 color: #1F2937;
                 font-size: 12px;
@@ -95,31 +108,80 @@ class MainTab(QWidget):
                 border-radius: 4px;
                 padding: 2px 6px;
             }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #FFFFFF;
+                selection-background-color: #D1D5DB;
+                selection-color: #374151;
+                font-size: 12px;
+            }
+            QComboBox QLineEdit {
+                alignment: AlignRight;
+            }
         """)
         
         module_layout.addWidget(self.cmb_module, stretch=1)
-        module_layout.addWidget(self.txt_module_val, stretch=0)
+        module_layout.addWidget(self.cmb_value, stretch=0)
         left_layout.addLayout(module_layout)
-        left_layout.addWidget(self.lbl_module_desc)
         
         self._prev_module_val = ""
         self.cmb_module.currentIndexChanged.connect(self._on_module_selected)
-        self.txt_module_val.textChanged.connect(self._on_module_val_changed)
+        self.cmb_value.currentIndexChanged.connect(self._on_value_selected)
         
         form_param = QFormLayout()
+        form_param.setSpacing(3)
+        form_param.setContentsMargins(0, 0, 0, 0)
         
         # 입력 위젯 정의 및 기본값 셋팅
         self.txt_tmax = QLineEdit(self.data_store.get("TMax", "600.0"))
+        self.txt_tmax.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.txt_dt = QLineEdit(self.data_store.get("DT", "0.0125"))
-        
+        self.txt_dt.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.txt_tmax.textChanged.connect(self._on_tmax_dt_changed)
+        self.txt_dt.textChanged.connect(self._on_tmax_dt_changed)
+
+        form_param.addRow("", QLabel(""))  # 한 줄 띄우기        
         form_param.addRow(QLabel("<h3><b>⚙️ Simulation Variables</b></h3>"))
-        form_param.addRow(QLabel("<font color='gray'>왼쪽에 추가 변수들을 계속 배치할 공간입니다.</font>"))
-        form_param.addRow("", QLabel(""))  # 한 줄 띄우기
         form_param.addRow("⏱️ Total Time (TMax):", self.txt_tmax)
         form_param.addRow("⏱️ Time Step (DT):", self.txt_dt)
         
+        form_param.addRow("", QLabel(""))  # 한 줄 띄우기
+        form_param.addRow(QLabel("<h3><b>⚙️ Initial Conditions</b></h3>"))
+        
+        self._ic_widgets = {}
+        ic_values = self._load_ic_from_edfile()
+        for key, desc in self.INITIAL_CONDITIONS.items():
+            val = ic_values.get(key, "0")
+            edit = QLineEdit(str(val))
+            edit.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            edit.textChanged.connect(self._on_ic_changed)
+            form_param.addRow(QLabel(f"📍 {key} ({desc})"), edit)
+            self._ic_widgets[key] = edit
+        
         left_layout.addLayout(form_param)
         left_layout.addStretch()  # 입력창들을 위로 밀착시킴
+        
+        bottom_btn_layout = QHBoxLayout()
+        bottom_btn_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_btn_layout.setSpacing(6)
+        
+        self.btn_apply = QPushButton("Apply")
+        self.btn_apply.setMinimumHeight(38)
+        self.btn_apply.setMinimumWidth(230)
+        self._update_apply_button(active=False)
+        self.btn_apply.clicked.connect(self._on_apply_clicked)
+        bottom_btn_layout.addWidget(self.btn_apply, alignment=Qt.AlignLeft)
+        
+        self.btn_discard = QPushButton("Discard")
+        self.btn_discard.setMinimumHeight(38)
+        self.btn_discard.setMinimumWidth(230)
+        self.btn_discard.clicked.connect(self._on_discard_clicked)
+        bottom_btn_layout.addWidget(self.btn_discard, alignment=Qt.AlignRight)
+        
+        left_layout.addLayout(bottom_btn_layout)
         
         main_splitter.addWidget(left_widget)
 
@@ -132,63 +194,6 @@ class MainTab(QWidget):
 
         console_btn_layout = QHBoxLayout()
 
-        self.btn_run_fast = QPushButton("🚀 Simulation Start")
-        self.btn_run_fast.setMinimumHeight(35)
-        self.btn_run_fast.setStyleSheet("""
-            QPushButton {
-                background-color: #E1F5FE; /* 연한 하늘색/파스텔 블루 배경 */
-                color: #0277BD;             /* 신뢰감을 주는 짙은 파란색 글자 */
-                font-weight: bold;
-                font-size: 12px;
-                border: 1px solid #B3E5FC;  /* 은은한 블루 톤 테두리 */
-                border-radius: 4px;
-            }
-            QPushButton:disabled {
-                background-color: #E5E7EB;
-                color: #9CA3AF;
-                border: 1px solid #D1D5DB;
-            }
-        """)
-        self.btn_run_fast.clicked.connect(self.run_openfast_process)
-        
-        self.btn_stop_fast = QPushButton("🛑 Stop")
-        self.btn_stop_fast.setMinimumHeight(35)
-        self.btn_stop_fast.setStyleSheet("""
-            QPushButton {
-                background-color: #FDE8E8; 
-                color: #03543F; 
-                font-weight: bold;
-                font-size: 12px;
-                border: 1px solid #FBD5D5;
-                border-radius: 4px;
-            }
-            QPushButton:disabled {
-                background-color: #E5E7EB;
-                color: #9CA3AF;
-                border: 1px solid #D1D5DB;
-            }
-        """)
-        self.btn_stop_fast.setEnabled(False)
-        self.btn_stop_fast.clicked.connect(self.stop_openfast_process)
-        
-        console_btn_layout.addWidget(self.btn_run_fast)
-        console_btn_layout.addWidget(self.btn_stop_fast)
-        right_layout.addLayout(console_btn_layout)
-        
-        self.cmd_output = QTextEdit()
-        self.cmd_output.setReadOnly(True)
-        self.cmd_output.setStyleSheet("""
-            QTextEdit {
-                background-color: #F4F5F7;  /* 연한 그레이 배경 */
-                color: #2D3748;             /* 부드러운 다크 차콜 글자색 */
-                font-family: 'Consolas', 'Courier New', monospace;
-                font-size: 13px;
-                border: 1px solid #E2E8F0;  /* 은은한 외곽 테두리 */
-                border-radius: 4px;
-            }
-        """)
-        self.cmd_output.append("💡 OpenFAST를 가동하면 여기에 실시간 CMD 로그가 출력됩니다.\n")
-        right_layout.addWidget(self.cmd_output)
 
         main_splitter.addWidget(right_widget)
 
@@ -199,6 +204,42 @@ class MainTab(QWidget):
         self.refresh_module_switches()
 
 
+
+    def on_tab_leave(self):
+        """ Main 탭을 떠날 때 변경사항 저장 여부 확인 """
+        if self.is_dirty():
+            main_win = self.window()
+            if main_win:
+                summary = self._change_summary()
+                reply = QMessageBox.question(
+                    main_win,
+                    "변경사항 저장",
+                    f"Main 탭에서 수정한 내용이 있습니다.\n\n{summary}\n\n변경사항을 적용하시겠습니까?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes
+                )
+                if reply == QMessageBox.Yes:
+                    self.apply_module_switches()
+                else:
+                    self.revert_module_switches()
+
+    def _change_summary(self):
+        parts = []
+        for key in self.MODULE_SWITCHES:
+            orig = self._original_switches.get(key, "")
+            curr = OpenFastIO.current_config.get(key, {}).get("current") or OpenFastIO.current_config.get(key, {}).get("default") or "0"
+            if orig != curr:
+                parts.append(f"- {key}: {orig} -> {curr}")
+        if self._original_tmax != self.txt_tmax.text():
+            parts.append(f"- TMax: {self._original_tmax} -> {self.txt_tmax.text()}")
+        if self._original_dt != self.txt_dt.text():
+            parts.append(f"- DT: {self._original_dt} -> {self.txt_dt.text()}")
+        for key in self.INITIAL_CONDITIONS:
+            orig = self._original_ic.get(key, "")
+            curr = self._ic_widgets[key].text()
+            if orig != curr:
+                parts.append(f"- {key}: {orig} -> {curr}")
+        return "\n".join(parts) if parts else "변경된 내용이 없습니다."
 
     def refresh_ui(self):
         """ 독립 위젯이 되면서 동적 레이아웃 재생성이 필요 없어졌습니다. 데이터 동기화가 필요하면 활용하세요. """
@@ -211,10 +252,34 @@ class MainTab(QWidget):
             "DT": self.txt_dt.text()
         }
 
+    def _load_ic_from_edfile(self):
+        main_fst = OpenFastIO.current_config.get("MainFST", {}).get("current", "").strip()
+        ed_name = (
+            OpenFastIO.current_config.get("EDFile", {}).get("current")
+            or OpenFastIO.current_config.get("EDFile", {}).get("default", "")
+        )
+        if not main_fst or not ed_name:
+            return {key: "0" for key in self.INITIAL_CONDITIONS}
+
+        ed_path = OpenFastIO.get_absolute_path(main_fst, ed_name)
+        if not os.path.exists(ed_path):
+            return {key: "0" for key in self.INITIAL_CONDITIONS}
+
+        result = {key: "0" for key in self.INITIAL_CONDITIONS}
+        try:
+            with open(ed_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 2 and parts[0].isdigit() and parts[1] in result:
+                        result[parts[1]] = parts[0]
+        except Exception:
+            pass
+        return result
+
     def refresh_module_switches(self):
         """ 콤보박스 항목을 OpenFastIO.current_config 기준으로 갱신 """
         self.cmb_module.blockSignals(True)
-        self.txt_module_val.blockSignals(True)
+        self.cmb_value.blockSignals(True)
         
         self.cmb_module.clear()
         
@@ -222,17 +287,33 @@ class MainTab(QWidget):
             cfg = OpenFastIO.current_config.get(key, {})
             val = cfg.get("current") or cfg.get("default") or "0"
             desc = self.MODULE_SWITCHES[key].get("desc", "")
-            self.cmb_module.addItem(f"{key}  ({desc}) : {val}", key)
+            self.cmb_module.addItem(f"{key} : {val} ({desc})", key)
         
         if self.cmb_module.count() > 0:
-            self.cmb_module.setCurrentIndex(self.cmb_module.count() - 1)
+            self.cmb_module.setCurrentIndex(0)
             self._sync_module_ui()
         
         self.cmb_module.blockSignals(False)
-        self.txt_module_val.blockSignals(False)
+        self.cmb_value.blockSignals(False)
+
+        self._original_switches = {
+            key: (OpenFastIO.current_config.get(key, {}).get("current") or OpenFastIO.current_config.get(key, {}).get("default") or "0")
+            for key in self.MODULE_SWITCHES
+        }
+        ic_values = self._load_ic_from_edfile()
+        self._original_ic = {key: ic_values.get(key, "0") for key in self.INITIAL_CONDITIONS}
+        for key in self.INITIAL_CONDITIONS:
+            if key in self._ic_widgets:
+                self._ic_widgets[key].blockSignals(True)
+                self._ic_widgets[key].setText(ic_values.get(key, "0"))
+                self._ic_widgets[key].blockSignals(False)
+        self._original_tmax = self.txt_tmax.text()
+        self._original_dt = self.txt_dt.text()
+        self._dirty = False
+        self._update_apply_button(active=False)
 
     def _on_module_selected(self, index):
-        """ 콤보박스 선택 변경 시 라인 에딧 및 설명 라벨 동기화 """
+        """ 콤보박스 선택 변경 시 값 콤보 및 설명 동기화 """
         if index < 0:
             return
         self._sync_module_ui()
@@ -244,145 +325,131 @@ class MainTab(QWidget):
         key = self.cmb_module.itemData(index)
         cfg = OpenFastIO.current_config.get(key, {})
         val = cfg.get("current") or cfg.get("default") or "0"
-        desc = self.MODULE_SWITCHES.get(key, {}).get("desc", "")
         
-        self.txt_module_val.blockSignals(True)
-        self.txt_module_val.setText(val)
-        self.txt_module_val.blockSignals(False)
-        self.lbl_module_desc.setText(desc)
+        allowed = self.MODULE_SWITCHES.get(key, {}).get("values", [])
+        self.cmb_value.blockSignals(True)
+        self.cmb_value.clear()
+        self.cmb_value.addItems(allowed)
+        if val in allowed:
+            self.cmb_value.setCurrentText(val)
+        elif allowed:
+            self.cmb_value.setCurrentIndex(0)
+        self.cmb_value.blockSignals(False)
         self._prev_module_val = val
 
-    def _on_module_val_changed(self, text):
-        """ 라인 에딧 값 변경 시 current_config 반영 """
-        index = self.cmb_module.currentIndex()
+    def _on_value_selected(self, index):
+        """ 값 콤보 선택 변경 시 current_config 및 모듈 콤보 텍스트 갱신 """
         if index < 0:
             return
-        key = self.cmb_module.itemData(index)
+        key = self.cmb_module.currentData()
         if not key or key not in self.MODULE_SWITCHES:
             return
-        
+        text = self.cmb_value.currentText()
         allowed = self.MODULE_SWITCHES[key]["values"]
         if text in allowed:
             OpenFastIO.current_config[key]["current"] = text
             self._prev_module_val = text
-            self.cmb_module.setItemText(index, f"{key} : {text}")
-        else:
-            self.txt_module_val.blockSignals(True)
-            self.txt_module_val.setText(self._prev_module_val)
-            self.txt_module_val.blockSignals(False)
+            self.cmb_module.setItemText(self.cmb_module.currentIndex(), f"{key} : {text} ({self.MODULE_SWITCHES[key].get('desc', '')})")
+            self._dirty = True
+            self._update_apply_button(active=True)
 
+    def _on_tmax_dt_changed(self, text):
+        self._dirty = True
+        self._update_apply_button(active=True)
 
-    def run_openfast_process(self):
-        """ 변수명 매핑 오류를 방지하기 위해 전체 위젯에서 FilesTab 인스턴스를 직접 탐색하여 호출하는 함수 """
-        from PySide6.QtWidgets import QApplication
-        from src.ui.tabs_input.files_tab import FilesTab # 정확한 타입 체크를 위해 임포트
+    def _on_ic_changed(self, text):
+        self._dirty = True
+        self._update_apply_button(active=True)
 
-        target_pane = None
+    def _on_apply_clicked(self):
+        if self.is_dirty():
+            result = self.apply_module_switches()
+            if result:
+                self._update_apply_button(active=False)
 
-        # 1. ✨ [핵심 수정] 프로그램 전체를 뒤져서 실시간으로 작동 중인 FilesTab 객체를 직접 찾아냅니다.
-        for widget in QApplication.allWidgets():
-            if isinstance(widget, FilesTab):
-                target_pane = widget
-                break
+    def _on_discard_clicked(self):
+        self.revert_module_switches()
+        self._update_apply_button(active=False)
 
-        # 만약 시스템 전체를 뒤졌는데도 찾지 못했다면 비상 대책 가동
-        if not target_pane:
-            main_win = self.window()
-            if main_win and hasattr(main_win, 'pane_files'):
-                target_pane = main_win.pane_files
+    def _update_apply_button(self, active):
+        style_active = """
+            QPushButton {
+                background-color: #2563EB;
+                color: #FFFFFF;
+                font-weight: bold;
+                font-size: 12px;
+                border: 1px solid #1D4ED8;
+                border-radius: 4px;
+                padding: 6px 12px;
+            }
+            QPushButton:hover { background-color: #1D4ED8; }
+        """
+        style_inactive = """
+            QPushButton {
+                background-color: #E5E7EB;
+                color: #374151;
+                font-weight: bold;
+                font-size: 12px;
+                border: 1px solid #D1D5DB;
+                border-radius: 4px;
+                padding: 6px 12px;
+            }
+            QPushButton:hover { background-color: #D1D5DB; }
+        """
+        style = style_active if active else style_inactive
+        if hasattr(self, 'btn_apply'):
+            self.btn_apply.setStyleSheet(style)
+        if hasattr(self, 'btn_discard'):
+            self.btn_discard.setStyleSheet(style)
 
-        # 최종 검증 실패 시 예외 처리
-        if not target_pane:
-            self.cmd_output.setText("❌ 시스템 오류: 메모리에서 Files 탭 인스턴스(FilesTab)를 탐색하지 못했습니다.")
-            return
+    def is_dirty(self):
+        return self._dirty
 
-        # 2. OpenFastIO.current_config에서 현재 로드된 .fst 파일의 전체 경로를 가져옵니다.
-        fst_path = OpenFastIO.current_config.get("MainFST", {}).get("current", "").strip()
+    def apply_module_switches(self):
+        """ 변경된 스위치 값을 메인 .fst 파일에 저장하고, Initial Conditions는 EDFile에 저장 """
+        main_fst = OpenFastIO.current_config.get("MainFST", {}).get("current", "")
+        if not main_fst or not os.path.exists(main_fst):
+            return False
 
-        if not fst_path or not os.path.exists(fst_path):
-            self.cmd_output.setText("❌ 에러: 로드된 .fst 파일이 없습니다. Files 탭에서 먼저 .fst 파일을 로드해 주세요.")
-            return
+        updated_data = {
+            key: (OpenFastIO.current_config.get(key, {}).get("current") or OpenFastIO.current_config.get(key, {}).get("default") or "0")
+            for key in self.MODULE_SWITCHES
+        }
+        updated_data["TMax"] = self.txt_tmax.text()
+        updated_data["DT"] = self.txt_dt.text()
+        fst_result = OpenFastIO.save_module_data(main_fst, updated_data)
 
-        # 3. FilesTab 함수 규격("키워드\t: 파일경로")에 맞게 가짜 텍스트(text)를 조합하여 가공
-        fake_text = f"MainFST\t: {fst_path}|BACKGROUND"
-        
-        try:
-            # 4. 안전하게 추출된 진짜 FilesTab 객체의 공용 실행 함수를 호출합니다.
-            result = target_pane.mouse_Rclick_run_openfast(fake_text)
-            
-            # 💡 [보완 핵심] 만약 인터락에 걸려 False를 반환받았다면, 내장 콘솔에 기록을 남기고 즉시 종료
-            if result is False:
-                self.cmd_output.append("\n⚠️ [경고] 이미 백그라운드에서 OpenFAST 시뮬레이션이 구동 중입니다. 작업을 취소합니다.")
-                return
-                
-            self.process = result
-            
-        except Exception as e:
-            self.cmd_output.setText(f"❌ 실행 엔진 호출 실패: {e}")
-            return
+        ed_name = (
+            OpenFastIO.current_config.get("EDFile", {}).get("current")
+            or OpenFastIO.current_config.get("EDFile", {}).get("default", "")
+        )
+        ed_result = True
+        if ed_name:
+            ed_path = OpenFastIO.get_absolute_path(main_fst, ed_name)
+            if os.path.exists(ed_path):
+                ic_data = {key: self._ic_widgets[key].text() for key in self.INITIAL_CONDITIONS}
+                ed_result = OpenFastIO.save_module_data(ed_path, ic_data)
 
-        # 5. 가로챈 실행 엔진이 정상 반환되었다면 내장 콘솔 창 스트림 및 시그널을 연결합니다.
-        if self.process:
-            self.cmd_output.clear()
-            self.cmd_output.append(f"⏳ OpenFAST 구동 시작 (공용 실행 엔진 가동 중...)\n")
-            self.cmd_output.append(f"📄 실행 대상: {os.path.basename(fst_path)}\n" + "-"*60 + "\n")
-            
-            # 실시간 로그 긁어오기 및 종료 콜백 시그널 바인딩
-            self.process.readyReadStandardOutput.connect(self.read_console_output)
-            self.process.finished.connect(self.on_process_finished)
-            
-            # 메인 버튼 인터랙션 권한 제어
-            self.btn_run_fast.setEnabled(False)
-            self.btn_stop_fast.setEnabled(True)
+        if fst_result and ed_result:
+            self._dirty = False
+        return fst_result and ed_result
 
+    def revert_module_switches(self):
+        """ 콤보박스 변경사항을 원래 상태로 되돌림 """
+        for key, val in self._original_switches.items():
+            if key in OpenFastIO.current_config:
+                OpenFastIO.current_config[key]["current"] = val
+        self.txt_tmax.blockSignals(True)
+        self.txt_dt.blockSignals(True)
+        self.txt_tmax.setText(self._original_tmax)
+        self.txt_dt.setText(self._original_dt)
+        self.txt_tmax.blockSignals(False)
+        self.txt_dt.blockSignals(False)
+        for key, val in self._original_ic.items():
+            if key in self._ic_widgets:
+                self._ic_widgets[key].blockSignals(True)
+                self._ic_widgets[key].setText(val)
+                self._ic_widgets[key].blockSignals(False)
+        self.refresh_module_switches()
 
-    def stop_openfast_process(self):
-        """ 실행 중인 cmd.exe와 하위 openfast.exe 프로세스를 완전히 강제 종료 """
-        # 프로세스 존재 및 실행 여부 검증
-        if hasattr(self, 'process') and self.process and self.process.state() == QProcess.Running:
-            
-            # 1. 윈도우 환경에서 하위 자식 프로세스(openfast.exe)까지 싹 다 강제 종료하기
-            pid = self.process.processId() # 현재 실행 중인 QProcess(cmd.exe)의 고유 번호(PID) 추출
-            if pid > 0:
-                import subprocess
-                # /F: 강제종료, /T: 자식 프로세스까지 통째로 종료
-                subprocess.run(f"taskkill /pid {pid} /f /t", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            # 2. 만약의 상황을 대비한 QProcess 자체 엔진 정지 및 메모리 해제 대기
-            self.process.kill()
-            self.process.waitForFinished(1000) # 최대 1초 대기
-            
-            self.cmd_output.append("\n🛑 사용자에 의해 시뮬레이션이 안전하게 강제 종료되었습니다.")
-            
-            # 3. UI 버튼 상태 정상화
-            self.btn_run_fast.setEnabled(True)
-            self.btn_stop_fast.setEnabled(False)
-
-
-    def read_console_output(self):
-        if self.process:
-            data = self.process.readAllStandardOutput()
-            try:
-                output_text = data.data().decode('cp949', errors='ignore')
-            except Exception:
-                output_text = data.data().decode('utf-8', errors='ignore')
-                
-            self.cmd_output.insertPlainText(output_text)
-            scrollbar = self.cmd_output.verticalScrollBar()
-            scrollbar.setValue(scrollbar.maximum())
-
-
-    def on_process_finished(self, exit_code, exit_status):
-        self.cmd_output.append(f"\n✨ 프로세스 종료됨 (Exit Code: {exit_code})")
-        self.btn_run_fast.setEnabled(True)
-        self.btn_stop_fast.setEnabled(False)
-
-        if exit_code == 0:
-            try:
-                main_win = self.window()
-                if main_win and hasattr(main_win, 'pane_plot'):
-                    self.cmd_output.append("\n📊 [OFA 알림] 시뮬레이션 완료에 따라 'Plot Data' 탭의 그래프 데이터를 자동 갱신합니다.")
-                    main_win.pane_plot.check_and_load_default_data()
-            except Exception as e:
-                self.cmd_output.append(f"\n⚠️ 그래프 자동 갱신 중 에러 발생: {e}")
 

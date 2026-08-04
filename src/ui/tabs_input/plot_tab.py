@@ -196,6 +196,10 @@ class PlotTab(QWidget):
         splitter_main.setSizes([250, 850])
         main_layout.addWidget(splitter_main)
 
+    def on_tab_enter(self):
+        """ Plot Data 탭 진입 시 최신 결과 파일 자동 로드 """
+        self.check_and_load_default_data()
+
     def check_and_load_default_data(self):
         """ OpenFastIO의 current_config 정보를 기반으로 자동 로딩을 수행합니다. """
         try:
