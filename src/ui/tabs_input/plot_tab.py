@@ -430,22 +430,6 @@ class PlotTab(QWidget):
             # 마우스가 그래프 바깥으로 나가면 초기 상태 기호로 리셋
             self.lbl_coords.setText("x = ---\ny = ---")
 
-    # ================= ✨ [새로 추가] 우클릭 팝업 메뉴 및 기능 =================
-    def mouseRclick_menu(self, pos):
-        """ 마우스 우클릭 시 팝업 메뉴를 띄웁니다. """
-        context_menu = QMenu(self)
-        
-        action_copy = context_menu.addAction("📋 그래프 클립보드 복사")
-        action_popup = context_menu.addAction("🖥️ 새 창으로 띄우기")
-        
-        # 전역 좌표로 메뉴 실행 후 사용자가 선택한 액션 반환
-        action = context_menu.exec(self.canvas.mapToGlobal(pos))
-        
-        if action == action_copy:
-            self.mouseRclick_copy_to_clipboard()
-        elif action == action_popup:
-            self.mouseRclick_open_to_window()
-
     def mouseRclick_menu(self, pos):
         """ 마우스 우클릭 시 팝업 메뉴를 띄웁니다. """
         context_menu = QMenu(self)
@@ -484,72 +468,9 @@ class PlotTab(QWidget):
         except Exception as e:
             print(f"Clipboard copy error: {e}")
 
-    def mouseRclick_open_to_window_(self):
-        """ 현재 우측 패널(그래프+컨트롤러)과 완벽히 일치하는 새 팝업 창을 생성합니다. """
-        try:
-            # 독립된 다이얼로그(새 창) 생성
-            pop_win = QDialog(self)
-            pop_win.setWindowTitle("Graph Viewer")
-            pop_win.resize(900, 700) # 시원한 크기로 초기 세팅
-            
-            # 새 레이아웃 구성
-            pop_layout = QVBoxLayout(pop_win)
-            pop_layout.setContentsMargins(5, 5, 5, 5)
-            
-            # 기존 우측 스플리터와 완전히 동일한 구성의 축소형 PlotTab 복제본 위젯 생성
-            # 단, 파일 데이터(df)와 선택된 컬럼 정보를 새 인스턴스에 똑같이 이식합니다.
-            sub_tab = PlotTab(parent=pop_win)
-            sub_tab.df = self.df.copy() if self.df is not None else None
-            sub_tab.columns = self.columns.copy()
-            sub_tab.update_ui_components() # 변수 리스트 복사
-            
-            # 현재 선택되어 있는 X축과 Y축 체크 상태 그대로 복사
-            sub_tab.combo_x.setCurrentText(self.combo_x.currentText())
-            
-            from PySide6.QtCore import QItemSelectionModel # 안전하게 함수 내에서 바로 불러옵니다.
-            
-            src_sel = self.var_tree.selectionModel().selectedRows()
-            for idx in src_sel:
-                col_name = idx.data(Qt.UserRole)
-                match_items = sub_tab.tree_model.findItems(col_name, Qt.MatchRecursive)
-                if match_items:
-                    # PySide6 표준 플래그 규격(SelectionFlag)을 적용하여 변수 선택 상태를 완전 복제합니다.
-                    flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
-                    sub_tab.var_tree.selectionModel().select(
-                        sub_tab.var_tree.model().indexFromItem(match_items[0]), flags
-                    )
-            
-            # 하단 체크박스 및 라디오 버튼 상태 싱크 맞추기
-            sub_tab.chk_grid.setChecked(self.chk_grid.isChecked())
-            sub_tab.chk_logx.setChecked(self.chk_logx.isChecked())
-            sub_tab.chk_logy.setChecked(self.chk_logy.isChecked())
-            sub_tab.chk_autoscale.setChecked(self.chk_autoscale.isChecked())
-            
-            # 현재 선택된 라디오 버튼 ID 싱크
-            active_id = self.bg_mode.checkedId()
-            if active_id != -1:
-                sub_tab.bg_mode.button(active_id).setChecked(True)
-            
-            # 뷰 동기화 후 새 도화지 렌더링 강제 실행
-            sub_tab.update_plot()
-            
-            # 💡 요구사항: 새로운 그래프 창은 현재 창의 "오른쪽과 동일한 형태"로 레이아웃
-            sub_tab.var_tree.parentWidget().hide() 
-            
-            # pop_layout.addWidget(sub_tab)
-            # pop_win.exec() # 모달 형태로 창 열기
-
-            pop_layout.addWidget(sub_tab)
-            # 부모 창(기존 창)이 소멸할 때 새 창도 함께 안전하게 닫히도록 속성 지정
-            pop_win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)    
-            # ✨ [핵심 변경] exec() 대신 show()를 쓰면 두 창을 동시에 활성화하여 조작할 수 있습니다.
-            pop_win.show() 
-            
-        except Exception as e:
-            print(f"Error opening new window: {e}")
 
     def mouseRclick_open_to_window(self):
-        """ 🖥️ [버그 완전 수정] 현재 다중 적재 상태 및 옵션과 100% 일치하는 새 팝업 창을 생성합니다. """
+        """ 🖥️ 현재 다중 적재 상태 및 옵션과 100% 일치하는 새 팝업 창을 생성합니다. """
         try:
             # 1. 독립된 다이얼로그(새 창) 생성 및 크기 세팅
             pop_win = QDialog(self)
@@ -862,111 +783,3 @@ class PlotTab(QWidget):
 
 
 
-
-    def var_tree_context_menu_(self, pos):
-        """ 메뉴를 열기 전에 미리 인덱스를 선점하여 확실하게 낚아채는 함수 """
-        
-        # 메뉴창을 띄우기 '전'에, 현재 마우스 우클릭 좌표 밑에 있는 아이템의 인덱스를 최우선으로 확보합니다.
-        clicked_index = self.var_tree.indexAt(pos)
-        selection_model = self.var_tree.selectionModel()
-        backup_indexes = selection_model.selectedRows()
-        
-        # 만약 마우스 좌클릭 다중 선택을 안 하고, 그냥 특정 항목 위에서 바로 우클릭을 한 경우라면
-        # 방금 마우스 커서가 찌른 그 아이템(clicked_index)을 백업 리스트에 강제로 수집합니다.
-        if not backup_indexes and clicked_index.isValid():
-            backup_indexes = [clicked_index]
-
-        # ------------------------------------------------------------------
-        # 데이터가 안전하게 백업되었으므로 이제 우클릭 팝업 메뉴를 띄웁니다.
-        # ------------------------------------------------------------------
-        context_menu = QMenu(self)
-        remove_action = context_menu.addAction("❌ 선택한 파일/변수 리스트에서 제거")
-        
-        # 마우스 커서 전역 좌표 기준으로 메뉴 열기
-        action = context_menu.exec(self.var_tree.mapToGlobal(pos))
-        
-        if action == remove_action:
-            from PySide6.QtWidgets import QMessageBox
-            
-            # 💡 [핵심 교정 2] 메뉴 실행 후 텅 비어버리는 selectionModel() 대신, 아까 미리 확보해둔 backup_indexes를 사용합니다!
-            if not backup_indexes:
-                QMessageBox.information(self, "안내", "리스트에서 제거할 파일이나 변수를 먼저 마우스로 선택해 주세요.")
-                return
-
-            files_to_remove = set()
-            
-            for index in backup_indexes:
-                # 인덱스로부터 실제 트리 아이템 객체 참조
-                item = self.tree_model.itemFromIndex(index)
-                if not item:
-                    continue
-                
-                # 사용자가 최상위 부모(파일 폴더) 노드를 선택한 경우 순수 파일명 파싱
-                if item.parent() is None:
-                    full_text = item.text().strip()
-                    
-                    # 1. 앞쪽 아이콘/이모지 제거 필터 가동
-                    pure_text = full_text
-                    for char in full_text:
-                        if char.isalnum() or char in ['_', '=', '-', '.']:
-                            pure_text = full_text[full_text.index(char):]
-                            break
-                    
-                    # 2. 뒤쪽 변수 개수 괄호 " (135)" 패턴 완벽 절단 (배열 인덱스 오류 완전 방지)
-                    if " (" in pure_text:
-                        file_title = pure_text.rsplit(" (", 1)[0].strip()
-                    else:
-                        file_title = pure_text.strip()
-                        
-                    files_to_remove.add(file_title)
-                
-                # 사용자가 폴더 내부의 하위 변수 자식 노드를 선택한 경우
-                else:
-                    file_title = item.data(Qt.UserRole + 1)
-                    if file_title:
-                        files_to_remove.add(str(file_title).strip())
-
-            if not files_to_remove:
-                return
-
-            # 💡 [검증 단계] 어떤 파일 이름이 최종적으로 발려나왔는지 대화상자로 표시
-            target_list = ", ".join(list(files_to_remove))
-            reply = QMessageBox.question(
-                self, "파일 제거 확인",
-                f"코드가 인지한 파일명: [ {target_list} ]\n\n"
-                f"선택한 {len(files_to_remove)}개의 파일 세션을 리스트와 백엔드 메모리에서 완전히 삭제하시겠습니까?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            
-            if reply == QMessageBox.StandardButton.Yes:
-                # 1. 백엔드 메모리 딕셔너리 데이터 소스에서 타겟 키 일괄 완전 삭제
-                for f_title in files_to_remove:
-                    if f_title in self.data_dict:
-                        del self.data_dict[f_title]
-                        print(f"[🗑️ 삭제 완료] {f_title}")
-                    else:
-                        # 2차 방어선: 대소문자 및 미세 공백 불일치 유연 매칭 청소
-                        matched_key = None
-                        for key in self.data_dict.keys():
-                            if key.lower().strip() == f_title.lower().strip():
-                                matched_key = key
-                                break
-                        if matched_key:
-                            del self.data_dict[matched_key]
-                            print(f"[🗑️ 삭제 완료(유연)] {matched_key}")
-                
-                # 2. 남은 데이터들을 기반으로 좌측 트리뷰 및 X축 컴포넌트 자동 동기화 리셋
-                if self.data_dict:
-                    self.update_ui_components()
-                else:
-                    # 데이터 소스가 텅 비었을 때 초기 상태 플레이스홀더 화면 복구
-                    self.tree_model.clear()
-                    self.combo_x.clear()
-                    self.combo_x.addItem("Time_[s]")
-                    
-                    placeholder = QStandardItem("💡여기에 .out 파일을 드래그하세요")
-                    placeholder.setSelectable(False)
-                    self.tree_model.appendRow(placeholder)
-                
-                # 3. 우측 Matplotlib 차트 화면도 지워진 데이터를 즉시 반영하여 새로고침
-                self.update_plot()

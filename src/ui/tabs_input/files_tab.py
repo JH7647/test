@@ -47,11 +47,26 @@ class FilesTab(QWidget):
         main_layout.setSpacing(2)
         main_layout.addWidget(splitter)
 
-    # region : [LEFT SIDE] 대기열 및 상태 관리 영역 
-    # =================================================================
-        left_panel = QVBoxLayout()
-        left_panel.setSpacing(5)
+# region : [LEFT SIDE] 대기열 및 상태 관리 영역 
+# =================================================================
 
+        # === [LEFT SIDE] 세로 Splitter로 분할 ===
+        left_vsplitter = QSplitter(Qt.Vertical)
+        left_vsplitter.setChildrenCollapsible(False)
+
+        # 상단: 디렉토리 버튼 + 파일 트리
+        left_top_widget = QWidget()
+        left_top_layout = QVBoxLayout(left_top_widget)
+        left_top_layout.setContentsMargins(0, 0, 0, 0)
+        left_top_layout.setSpacing(5)
+
+        # 하단: 프로세스 헤더 + 프로세스 트리
+        left_bottom_widget = QWidget()
+        left_bottom_layout = QVBoxLayout(left_bottom_widget)
+        left_bottom_layout.setContentsMargins(0, 0, 0, 0)
+        left_bottom_layout.setSpacing(5)
+        # ========================================
+        
         # 1. Path 정보 (버튼 -> 디렉토리 변경)
         # 레지스트리에서 마지막 세션 복구 자동 가동
         settings = QSettings("JHLEE", "OFA")
@@ -90,7 +105,7 @@ class FilesTab(QWidget):
         # 버튼을 클릭했을 때 작동할 이벤트 연결 
         self.btn_change_dir.clicked.connect(self.btn_change_dir_clicked)
 
-        left_panel.addWidget(self.btn_change_dir)
+        left_top_layout.addWidget(self.btn_change_dir)
         
         # 2. .fst 파일 list 트리뷰         
         self.dir_tree_list = QTreeView()  
@@ -135,7 +150,7 @@ class FilesTab(QWidget):
         self.dir_tree_list.setContextMenuPolicy(Qt.CustomContextMenu)
         # self.dir_tree_list.customContextMenuRequested.connect(self.on_dir_tree_item_right_clicked)
 
-        left_panel.addWidget(self.dir_tree_list, stretch=4)
+        left_top_layout.addWidget(self.dir_tree_list, stretch=4)
 
         if last_fst_path and os.path.exists(last_fst_path):
             self.update_dir_tree_list(last_fst_path)
@@ -201,7 +216,7 @@ class FilesTab(QWidget):
         process_header_layout.addWidget(self.btn_left_stop)
         
         # 레이아웃을 패널에 추가
-        left_panel.addLayout(process_header_layout)
+        left_bottom_layout.addLayout(process_header_layout)
         
         # 프로세스 상태 리스트를 표현할 트리뷰 (또는 리스트뷰)
         self.process_tree_view = QTreeView()
@@ -221,28 +236,39 @@ class FilesTab(QWidget):
                 color: #374151;
             }
         """)
-        left_panel.addWidget(self.process_tree_view, stretch=2)
+        left_bottom_layout.addWidget(self.process_tree_view, stretch=2)
 
-        self.process_logs = {}       # 💡 {파일경로: "누적 로그 문자열"} 형태로 로그를 보관할 장부
+        self.process_logs = {}       # {파일경로: "누적 로그 문자열"} 형태로 로그를 보관할 장부
         self.current_viewing_path = "" # 현재 사용자가 클릭해서 보고 있는 파일 경로 Track
-
-        # Process list 표시 영역 하단에 클릭 이벤트 연결
         self.process_tree_view.clicked.connect(self.on_process_item_clicked)
 
-        # 좌측 패널 가로 크기 제한 
-        left_container = QWidget()
-        left_container.setLayout(left_panel)
-        left_container.setMinimumWidth(300)
-        splitter.addWidget(left_container)
+        # 세로 Splitter에 위젯 추가
+        left_top_widget.setMinimumWidth(300)
+        left_vsplitter.addWidget(left_top_widget)
+        left_vsplitter.addWidget(left_bottom_widget)
+        left_vsplitter.setSizes([400, 180])  # 초기 비율
 
-    # endregion : =====================================================
+        splitter.addWidget(left_vsplitter)
+
+# endregion : =====================================================
 
 
 
-    # region : [RIGHT SIDE] 파일 경로 상세 정보 및 실행 로그 제어 영역
-    # =================================================================
-        right_panel = QVBoxLayout()
-        right_panel.setSpacing(5)
+# region : [RIGHT SIDE] 파일 경로 상세 정보 및 실행 로그 제어 영역
+# =================================================================
+        # === [RIGHT SIDE] ===
+        right_vsplitter = QSplitter(Qt.Vertical)
+        right_vsplitter.setChildrenCollapsible(False)
+
+        right_top_widget = QWidget()
+        right_top_layout = QVBoxLayout(right_top_widget)
+        right_top_layout.setContentsMargins(0, 0, 0, 0)
+        right_top_layout.setSpacing(5)
+
+        right_bottom_widget = QWidget()
+        right_bottom_layout = QVBoxLayout(right_bottom_widget)
+        right_bottom_layout.setContentsMargins(0, 0, 0, 0)
+        right_bottom_layout.setSpacing(5)
 
         # 1. 상단: .fst 파일 path 정보 및 세부 연동 파일 표시 트리뷰
         current_fst_path = ""
@@ -319,7 +345,7 @@ class FilesTab(QWidget):
         self.model_tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.model_tree_view.customContextMenuRequested.connect(self.on_model_tree_item_right_clicked)
 
-        right_panel.addWidget(self.model_tree_view, stretch=402)
+        right_top_layout.addWidget(self.model_tree_view, stretch=402)
 
         if current_fst_path and os.path.exists(current_fst_path):
             self.update_model_tree_view(current_fst_path)
@@ -333,7 +359,7 @@ class FilesTab(QWidget):
         lbl_process_result.setStyleSheet("font-weight: bold; color: #374151; font-size: 14px;")
         process_result_header_layout.addWidget(lbl_process_result)
         
-        right_panel.addLayout(process_result_header_layout)
+        right_bottom_layout.addLayout(process_result_header_layout)
 
         # cmd 로그 출력 창 (`QTextEdit`)
         self.cmd_output = QTextEdit()
@@ -350,14 +376,14 @@ class FilesTab(QWidget):
             }
         """)
         self.cmd_output.append("Simulation logs will be displayed.\n")
-        right_panel.addWidget(self.cmd_output, stretch=186)
+        right_bottom_layout.addWidget(self.cmd_output, stretch=186)
 
-        # 우측 레이아웃 등록
-        right_container = QWidget()
-        right_container.setLayout(right_panel)
-        right_container.setMinimumWidth(300)
-        splitter.addWidget(right_container)
-        # endregion : =====================================================
+        right_top_widget.setMinimumWidth(300)
+        right_vsplitter.addWidget(right_top_widget)
+        right_vsplitter.addWidget(right_bottom_widget)
+        right_vsplitter.setSizes([500, 300])
+        splitter.addWidget(right_vsplitter)
+# endregion : =====================================================
 
 
     def on_dir_tree_item_double_clicked(self, index):
