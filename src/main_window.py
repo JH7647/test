@@ -18,7 +18,7 @@ from src.core.openfast_io import OpenFastIO
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("OFA - OpenFAST Automation")
+        self.setWindowTitle("WindBOT by JHLEE")
         self.resize(1100, 650)
 
         self.setAcceptDrops(True)   # 마우스 파일 드롭 허용
@@ -76,8 +76,7 @@ class MainWindow(QMainWindow):
         settings = QSettings("JHLEE", "OFA")
         last_fst_path = settings.value("LastFstPath_fst", "")
         if last_fst_path and os.path.exists(last_fst_path):
-            self.pane_files.update_model_tree_view(last_fst_path)
-#            self.pane_files.load_fst_file(last_fst_path)
+            self.pane_files.update_model_tree(last_fst_path)
 
     def is_simulation_running(self):
         """ 현재 프로그램 전체에서 OpenFAST가 실행 중인지 체크 """

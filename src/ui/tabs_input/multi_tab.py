@@ -15,41 +15,6 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtCore import Qt
 from PySide6.QtCore import QCoreApplication
 
-
-
-def open_multi_case_window(parent, text):
-    """ 우클릭 참조 텍스트(text)에서 파일경로를 추출해 모달리스 창을 띄웁니다. """
-    file_path = text.split(":", 1)[1].strip() if ":" in text else text.strip()
-    if not os.path.exists(file_path):
-        QMessageBox.warning(parent, "입력 파일 오류",
-                             "실행할 파일이 경로에 존재하지 않습니다.\n\n경로: " + file_path)
-        return
-
-    ref_dir = os.path.dirname(file_path)
-    ref_name = os.path.basename(file_path)
-
-    excel_path = ""
-    for d in (ref_dir, os.path.dirname(ref_dir)):
-        if not d or not os.path.isdir(d):
-            continue
-        for fn in os.listdir(d):
-            if fn.lower().startswith("designloadcasetable") and fn.lower().endswith((".xlsx", ".xlsm", ".xls")):
-                excel_path = os.path.join(d, fn)
-                break
-        if excel_path:
-            break
-
-    if not excel_path or not os.path.exists(excel_path):
-        QMessageBox.critical(
-            parent, "LoadCase 엑셀 없음",
-            "참조파일 경로 또는 상위 디렉토리에서\n'DesignLoadCaseTable' 엑셀 파일을 찾을 수 없습니다.\n\n참조파일: " + ref_name
-        )
-        return
-
-    print(f"[MultiCase] 엑셀 파일 활용: {excel_path}")
-    MultiCaseRunWindow(parent, file_path, ref_name, excel_path).show()
-
-
 class MultiCaseRunWindow(QDialog):
     """ 모달리스 다중 케이스 실행 설정 창 """
 
@@ -73,6 +38,7 @@ class MultiCaseRunWindow(QDialog):
         self.excel_read = [""]
         self.current_wb = None
         self.current_ws = None
+        self.apply_all_policy = None # 덮어쓰기 정책을 위한 멤버 변수
 
         self.setWindowTitle("다중 케이스 실행 설정")
         self.resize(1000, 500)
@@ -116,6 +82,40 @@ class MultiCaseRunWindow(QDialog):
         layout.addWidget(self.btn_run)
 
         self.reload_excel(self.excel_path, keep_selection=False)
+
+    @staticmethod
+    def show_window(parent, text):
+        """ 우클릭 참조 텍스트(text)에서 파일경로를 추출해 모달리스 창을 띄웁니다. """
+        file_path = text.split(":", 1)[1].strip() if ":" in text else text.strip()
+        if not os.path.exists(file_path):
+            QMessageBox.warning(parent, "입력 파일 오류",
+                                 "실행할 파일이 경로에 존재하지 않습니다.\n\n경로: " + file_path)
+            return
+
+        ref_dir = os.path.dirname(file_path)
+        ref_name = os.path.basename(file_path)
+
+        excel_path = ""
+        for d in (ref_dir, os.path.dirname(ref_dir)):
+            if not d or not os.path.isdir(d):
+                continue
+            for fn in os.listdir(d):
+                if fn.lower().startswith("designloadcasetable") and fn.lower().endswith((".xlsx", ".xlsm", ".xls")):
+                    excel_path = os.path.join(d, fn)
+                    break
+            if excel_path:
+                break
+
+        if not excel_path or not os.path.exists(excel_path):
+            QMessageBox.critical(
+                parent, "LoadCase 엑셀 없음",
+                "참조파일 경로 또는 상위 디렉토리에서\n'DesignLoadCaseTable' 엑셀 파일을 찾을 수 없습니다.\n\n참조파일: " + ref_name
+            )
+            return
+
+        print(f"[MultiCase] 엑셀 파일 활용: {excel_path}")
+        # 클래스 자신을 인스턴스화하여 보여줍니다.
+        MultiCaseRunWindow(parent, file_path, ref_name, excel_path).show()
 
     def _make_temp_copy(self, src_path):
         try:
@@ -395,49 +395,6 @@ class MultiCaseRunWindow(QDialog):
         main_fst_basename = os.path.basename(main_fst_path)
         main_fst_base = os.path.splitext(main_fst_basename)[0]
 
-        # helper: 기존 파일 존재시 사용자에게 덮어쓰기 확인
-        def confirm_overwrite_with_policy(path):
-            nonlocal apply_all_policy  # 부모 루프의 정책 변수를 변경하기 위해 nonlocal 선언
-            
-            if not os.path.exists(path):
-                return True  # 새 파일이면 무조건 생성
-                
-            # 이미 "모두 적용" 정책이 결정되어 있다면 팝업 없이 즉시 반환
-            if apply_all_policy == "YES_ALL":
-                return True
-            if apply_all_policy == "NO_ALL":
-                return False
-
-            # Custom 메시지 박스 생성 (기본 메시지 박스는 YesToAll 버튼 커스텀이 까다로움)
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("파일 덮어쓰기 확인")
-            msg_box.setText(f"이미 존재하는 파일입니다:\n{os.path.basename(path)}\n\n덮어쓰시겠습니까?")
-            
-            # 필요한 버튼들 등록
-            yes_btn = msg_box.addButton("예 (&Y)", QMessageBox.ButtonRole.YesRole)
-            yes_all_btn = msg_box.addButton("모두 예 (&A)", QMessageBox.ButtonRole.YesRole)
-            no_btn = msg_box.addButton("아니오 (&N)", QMessageBox.ButtonRole.NoRole)
-            no_all_btn = msg_box.addButton("모두 아니오 (&L)", QMessageBox.ButtonRole.NoRole)
-            cancel_btn = msg_box.addButton(QMessageBox.StandardButton.Cancel)
-            
-            msg_box.setDefaultButton(no_btn) # 엔터 시 안전하게 '아니오'가 선택되도록 설정
-            msg_box.exec_()
-            
-            clicked_btn = msg_box.clickedButton()
-            
-            if clicked_btn == yes_btn:
-                return True
-            elif clicked_btn == yes_all_btn:
-                apply_all_policy = "YES_ALL" # 💡 이후 파일들은 팝업 없이 모두 True
-                return True
-            elif clicked_btn == no_btn:
-                return False
-            elif clicked_btn == no_all_btn:
-                apply_all_policy = "NO_ALL"  # 💡 이후 파일들은 팝업 없이 모두 False
-                return False
-            else:
-                return None # Cancel (전체 취소)
-
         # 1. 복사 대상 하위 파일 수집 (OpenFastIO.current_config 활용)
         from src.core.openfast_io import OpenFastIO
         files_to_copy = []  # (key, 원래절대경로) 저장
@@ -494,14 +451,14 @@ class MultiCaseRunWindow(QDialog):
             "inflowfile": ".inf"
         }
 
-        apply_all_policy = None
+        self.apply_all_policy = None # 덮어쓰기 정책 초기화
 
         # 2. 각 run별 생성 + 매핑
         for run_key, run_data in of_run_list.items():
             fst_filename = run_data.get("FST_File", "")
             if not fst_filename:
                 continue
-
+            
             main_replace_map = {}
             sub_replace_map = {}
             copied_files = []
@@ -509,7 +466,7 @@ class MultiCaseRunWindow(QDialog):
 
             # 2-1. 메인 .fst 복사
             new_fst_path = os.path.join(main_fst_dir, f"{fst_filename}.fst")
-            confirm = confirm_overwrite_with_policy(new_fst_path)
+            confirm = self.confirm_overwrite_with_policy(new_fst_path)
             if confirm is None:
                 print("[MultiCase] 사용자가 작업을 취소했습니다.")
                 return
@@ -536,7 +493,7 @@ class MultiCaseRunWindow(QDialog):
                     new_sub_basename = f"{fst_filename}{target_ext}"
                     dst_path = os.path.join(main_fst_dir, new_sub_basename)
 
-                    confirm = confirm_overwrite_with_policy(dst_path)
+                    confirm = self.confirm_overwrite_with_policy(dst_path)
                     if confirm is None:
                         print("[MultiCase] 사용자가 작업을 취소했습니다.")
                         return
@@ -687,6 +644,47 @@ class MultiCaseRunWindow(QDialog):
                 QCoreApplication.processEvents()
 
         print("=" * 60 + "\n")
+
+    def confirm_overwrite_with_policy(self, path):
+        """ helper: 기존 파일 존재시 사용자에게 덮어쓰기 확인 """
+        if not os.path.exists(path):
+            return True  # 새 파일이면 무조건 생성
+            
+        # 이미 "모두 적용" 정책이 결정되어 있다면 팝업 없이 즉시 반환
+        if self.apply_all_policy == "YES_ALL":
+            return True
+        if self.apply_all_policy == "NO_ALL":
+            return False
+
+        # Custom 메시지 박스 생성 (기본 메시지 박스는 YesToAll 버튼 커스텀이 까다로움)
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("파일 덮어쓰기 확인")
+        msg_box.setText(f"이미 존재하는 파일입니다:\n{os.path.basename(path)}\n\n덮어쓰시겠습니까?")
+        
+        # 필요한 버튼들 등록
+        yes_btn = msg_box.addButton("예 (&Y)", QMessageBox.ButtonRole.YesRole)
+        yes_all_btn = msg_box.addButton("모두 예 (&A)", QMessageBox.ButtonRole.YesRole)
+        no_btn = msg_box.addButton("아니오 (&N)", QMessageBox.ButtonRole.NoRole)
+        no_all_btn = msg_box.addButton("모두 아니오 (&L)", QMessageBox.ButtonRole.NoRole)
+        cancel_btn = msg_box.addButton(QMessageBox.StandardButton.Cancel)
+        
+        msg_box.setDefaultButton(no_btn) # 엔터 시 안전하게 '아니오'가 선택되도록 설정
+        msg_box.exec_()
+        
+        clicked_btn = msg_box.clickedButton()
+        
+        if clicked_btn == yes_btn:
+            return True
+        elif clicked_btn == yes_all_btn:
+            self.apply_all_policy = "YES_ALL" # 💡 이후 파일들은 팝업 없이 모두 True
+            return True
+        elif clicked_btn == no_btn:
+            return False
+        elif clicked_btn == no_all_btn:
+            self.apply_all_policy = "NO_ALL"  # 💡 이후 파일들은 팝업 없이 모두 False
+            return False
+        else:
+            return None # Cancel (전체 취소)
 
 
 
