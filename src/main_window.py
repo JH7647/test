@@ -100,3 +100,8 @@ class MainWindow(QMainWindow):
 
         if new_widget and hasattr(new_widget, "on_tab_enter"):
             new_widget.on_tab_enter()
+
+    def closeEvent(self, event):
+        """윈도우 종료 시 실행 중인 모든 프로세스를 정리합니다."""
+        self.pane_files.cleanup_processes()
+        event.accept()

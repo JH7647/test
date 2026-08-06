@@ -1,216 +1,298 @@
 import os
+from sqlite3 import Time
 from PySide6.QtWidgets import (QWidget, QFormLayout, QLineEdit, QLabel, QTextEdit, 
-                               QPushButton, QHBoxLayout, QVBoxLayout, QSplitter, QComboBox)
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QComboBox, QMessageBox
+                               QPushButton, QHBoxLayout, QVBoxLayout, QSplitter, QComboBox, QCheckBox, QScrollArea, QFrame)
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QComboBox, QMessageBox, QStyleFactory
 from PySide6.QtCore import QProcess, Qt
 from src.core.openfast_io import OpenFastIO
 
 class MainTab(QWidget):
     MODULE_SWITCHES = {
-        "CompElast":  {"values": ["1", "2", "3"], "desc": "1=ElastoDyn; 2=BeamDyn; 3=Simplified ElastoDyn"},
-        "CompInflow": {"values": ["0", "1", "2"], "desc": "0=still air; 1=InflowWind; 2=external from ExtInflow"},
-        "CompAero":   {"values": ["0", "1", "2", "3"], "desc": "0=None; 1=AeroDisk; 2=AeroDyn; 3=ExtLoads"},
-        "CompServo":  {"values": ["0", "1"], "desc": "0=None; 1=ServoDyn"},
-        "CompSeaSt":  {"values": ["0", "1"], "desc": "0=None; 1=SeaState"},
-        "CompHydro":  {"values": ["0", "1"], "desc": "0=None; 1=HydroDyn"},
-        "CompSub":    {"values": ["0", "1", "2"], "desc": "0=None; 1=SubDyn; 2=External Platform MCKF"},
-        "CompMooring":{"values": ["0", "1", "2", "3", "4"], "desc": "0=None; 1=MAP++; 2=FEAMooring; 3=MoorDyn; 4=OrcaFlex"},
-        "CompIce":    {"values": ["0", "1", "2"], "desc": "0=None; 1=IceFloe; 2=IceDyn"},
-        "CompSoil":   {"values": ["0", "1"], "desc": "0=None; 1=SoilDyn"},
+        "CompElast":  {"value": "", "values": ["1", "2", "3"], "desc": "1=ElastoDyn; 2=BeamDyn; 3=Simplified ElastoDyn"},
+        "CompInflow": {"value": "", "values": ["0", "1", "2"], "desc": "0=still air; 1=InflowWind; 2=external from ExtInflow"},
+        "CompAero":   {"value": "", "values": ["0", "1", "2", "3"], "desc": "0=None; 1=AeroDisk; 2=AeroDyn; 3=ExtLoads"},
+        "CompServo":  {"value": "", "values": ["0", "1"], "desc": "0=None; 1=ServoDyn"},
+        "CompSeaSt":  {"value": "", "values": ["0", "1"], "desc": "0=None; 1=SeaState"},
+        "CompHydro":  {"value": "", "values": ["0", "1"], "desc": "0=None; 1=HydroDyn"},
+        "CompSub":    {"value": "", "values": ["0", "1", "2"], "desc": "0=None; 1=SubDyn; 2=External Platform MCKF"},
+        "CompMooring":{"value": "", "values": ["0", "1", "2", "3", "4"], "desc": "0=None; 1=MAP++; 2=FEAMooring; 3=MoorDyn; 4=OrcaFlex"},
+        "CompIce":    {"value": "", "values": ["0", "1", "2"], "desc": "0=None; 1=IceFloe; 2=IceDyn"},
+        "CompSoil":   {"value": "", "values": ["0", "1"], "desc": "0=None; 1=SoilDyn"},
     }
+
     INITIAL_CONDITIONS = {
-        "OoPDefl":   "out-of-plane blade-tip displacement (meters)",
-        "IPDefl":    "in-plane blade-tip deflection (meters)",
-        "BlPitch(1)": "Blade 1 pitch (degrees)",
-        "BlPitch(2)": "Blade 2 pitch (degrees)",
-        "BlPitch(3)": "Blade 3 pitch (degrees)",
-        "Azimuth":   "Azimuth angle for blade 1 (degrees)",
-        "RotSpeed":  "Rotor speed (rpm)",
-        "NacYaw":    "Nacelle-yaw angle (degrees)",
-        "TTDspFA":   "Fore-aft tower-top displacement (meters)",
-        "TTDspSS":   "Side-to-side tower-top displacement (meters)",
-        "PtfmSurge": "Surge translational displacement (meters)",
-        "PtfmSway":  "Sway translational displacement (meters)",
-        "PtfmHeave": "Heave translational displacement (meters)",
-        "PtfmRoll":  "Roll rotational displacement (degrees)",
-        "PtfmPitch": "Pitch rotational displacement  (degrees)",
-        "PtfmYaw":   "Yaw rotational displacement (degrees)",
+        "OoPDefl":    {"value": "", "desc": "out-of-plane blade-tip displacement (meters)"},
+        "IPDefl":     {"value": "", "desc": "in-plane blade-tip deflection (meters)"},
+        "BlPitch(1)": {"value": "", "desc": "Blade 1 pitch (degrees)"},
+        "BlPitch(2)": {"value": "", "desc": "Blade 2 pitch (degrees)"},
+        "BlPitch(3)": {"value": "", "desc": "Blade 3 pitch (degrees)"},
+        "Azimuth":    {"value": "", "desc": "Azimuth angle for blade 1 (degrees)"},
+        "RotSpeed":   {"value": "", "desc": "Rotor speed (rpm)"},
+        "NacYaw":     {"value": "", "desc": "Nacelle-yaw angle (degrees)"},
+        "TTDspFA":    {"value": "", "desc": "Fore-aft tower-top displacement (meters)"},
+        "TTDspSS":    {"value": "", "desc": "Side-to-side tower-top displacement (meters)"},
+        "PtfmSurge":  {"value": "", "desc": "Surge translational displacement (meters)"},
+        "PtfmSway":   {"value": "", "desc": "Sway translational displacement (meters)"},
+        "PtfmHeave":  {"value": "", "desc": "Heave translational displacement (meters)"},
+        "PtfmRoll":   {"value": "", "desc": "Roll rotational displacement (degrees)"},
+        "PtfmPitch":  {"value": "", "desc": "Pitch rotational displacement  (degrees)"},
+        "PtfmYaw":    {"value": "", "desc": "Yaw rotational displacement (degrees)"},
     }
+
+    MAIN_FST_KEYS = {
+        "Description": {"value": "", "desc": "Description of the simulation"}, # Description은 파일의 2번째 줄에 위치
+        "Echo":        {"value": "", "desc": "Echo input file parameters to <RootName>.ech"},
+        "SumPrint":    {"value": "", "desc": "Print summary data to <RootName>.sum"},
+        "TMax":        {"value": "", "desc": "Total run time (s)"},
+        "DT":          {"value": "", "desc": "Recommended module time step (s)"},
+        "SttsTime":    {"value": "", "desc": "Amount of time between screen status messages (s)"},
+        "DT_Out":      {"value": "", "desc": "Time step for tabular output (s) (or 'default')"},
+        "TStart":      {"value": "", "desc": "Time to begin tabular output (s)"},
+        "OutFileFmt":  {"value": "", "desc": "Format for tabular (time-marching) output file (switch) (1: text file [<RootName>.out], 2: binary file [<RootName>.outb], 3: both 1 and 2, 4: uncompressed binary [<RootName>.outb, 5: both 1 and 4)"},
+        "OutFmt":      {"value": "", "desc": "Format used for text tabular output, excluding the time channel.  Resulting field should be 10 characters. (quoted string)"},
+    }
+
 
     def __init__(self, main_window=None, parent=None):
         super().__init__(parent)
+        import copy
         self.main_window = main_window  # 부모 윈도우 인스턴스 저장
-        
-        # 가상의 데이터 저장소 역할 (기존 부모가 제공하던 data_store 대응용)
-        self.data_store = {} 
-        self._original_switches = {}
-        self._original_ic = {}
-        self._original_tmax = ""
-        self._original_dt = ""
         self._dirty = False
+        self.module_switches_data = copy.deepcopy(self.MODULE_SWITCHES)
+        self.initial_conditions_data = copy.deepcopy(self.INITIAL_CONDITIONS)
+        self.main_fst_keys_data = copy.deepcopy(self.MAIN_FST_KEYS)
         
         # 최초 1회 화면 구조를 완벽하게 조립합니다.
         self.init_ui()
-
     def init_ui(self):
         """ 좌측 변수 입력 패널과 우측 콘솔 패널을 완전히 독립적으로 배치 """
         # 메인 가로 레이아웃
-        main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(5, 5, 5, 5)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+
+#  [상단 영역] 파일 정보 및 저장 버튼 ===========================================================================
+        top_bar_layout = QHBoxLayout()
+        top_bar_layout.setSpacing(15)
+
+        # --- 1. 파일 경로 ---
+        self.lbl_file_path = QLabel("N/A")
+        self.lbl_file_path.setStyleSheet("font-weight: bold; font-size: 14px;")
+        lbl_filename_title = QLabel("📝 File Name:")
+        lbl_filename_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        top_bar_layout.addWidget(lbl_filename_title)
+        top_bar_layout.addWidget(self.lbl_file_path, 1)
+        top_bar_layout.addStretch()
+
+        # --- 2. 저장/취소 버튼 ---
+        self.btn_apply = QPushButton("Apply")
+        self.btn_discard = QPushButton("Discard")
+        self.btn_apply.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.btn_discard.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.btn_apply.setMinimumSize(120, 34)
+        self.btn_discard.setMinimumSize(120, 34)
+        self.update_apply_button(active=False)
+        self.btn_apply.clicked.connect(self.on_apply_clicked)
+        self.btn_discard.clicked.connect(self.on_discard_clicked)
+        top_bar_layout.addWidget(self.btn_apply)
+        top_bar_layout.addWidget(self.btn_discard)
+
+        main_layout.addLayout(top_bar_layout)
 
         # 좌우 조절용 가로형 스플리터 생성
         main_splitter = QSplitter(Qt.Horizontal)
 
-        # ================= [좌측 영역] 시뮬레이션 변수 입력 패널 =================
+# region : [LEFT SIDE] Description, Toggles, Module Switches ====================================================================================================
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(0, 0, 10, 0)
+        left_widget.setStyleSheet("background-color: #F0F0F0;") # 연한 회색 배경 적용
+        left_layout.setContentsMargins(10, 10, 10, 0)
         left_layout.setSpacing(3)
+
+        left_layout.addWidget(QLabel("<b style='font-size:12px;'>⚙️ General Settings</b>")) 
+
+        # --- Description, Echo, SumPrint ---
+        general_form_layout = QFormLayout()
+        general_form_layout.setSpacing(3)
         
-        left_layout.addWidget(QLabel("<h3><b>⚙️ Module Select</b></h3>"))
+        lbl_desc_title = QLabel("📍Description :")
+        self.txt_description = QLineEdit()
+        self.txt_description.setStyleSheet("font-size: 12px; background-color: white;")
+        self.txt_description.textChanged.connect(self.mark_asdirty)
+        general_form_layout.addRow(lbl_desc_title, self.txt_description)
+
+        self.chk_echo = QCheckBox("Echo")
+        self.chk_echo.setToolTip("Echo input file parameters to <RootName>.ech")
+        self.chk_echo.setStyleSheet("font-size: 12px; background: transparent;")
+
+        # 윈도우 테마 버그를 우회하고 사각 박스 레이아웃을 고정합니다.
+        self.chk_echo.setStyle(QStyleFactory.create("Fusion")) 
+        self.chk_echo.checkStateChanged.connect(self.mark_asdirty)
+        general_form_layout.addRow("📍Echo file ", self.chk_echo)
+
+        self.chk_sumprint = QCheckBox("SumPrint")
+        self.chk_sumprint.setToolTip("Print summary data to <RootName>.sum")
+        self.chk_sumprint.setStyleSheet("font-size: 12px; background: transparent;")
         
-        module_layout = QHBoxLayout()
-        module_layout.setContentsMargins(0, 0, 0, 0)
-        module_layout.setSpacing(3)
+        self.chk_sumprint.setStyle(QStyleFactory.create("Fusion")) 
+        self.chk_sumprint.checkStateChanged.connect(self.mark_asdirty)
+        general_form_layout.addRow("📍Summary file ", self.chk_sumprint)
+
+
+        left_layout.addLayout(general_form_layout)
+
+        # 구분선 추가
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setStyleSheet("margin-top: 5px; margin-bottom: 5px; color: #E5E7EB;")
+        left_layout.addWidget(separator)
+
+        # --- Module Switches ---
+        left_layout.addWidget(QLabel("<b style='font-size:12px;'>⚙️ Module Switches</b>"))
+        self.module_widgets = {}
+        module_form_layout = QFormLayout()
+        module_form_layout.setSpacing(5)
         
-        self.cmb_module = QComboBox()
-        self.cmb_module.setMinimumHeight(28)
-        self.cmb_module.setStyleSheet("""
-            QComboBox {
-                background-color: #FFFFFF;
-                color: #1F2937;
-                font-size: 12px;
-                border: 1px solid #D1D5DB;
-                border-radius: 4px;
-                padding: 2px 8px;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #FFFFFF;
-                selection-background-color: #D1D5DB;
-                selection-color: #374151;
-                font-size: 12px;
-            }
-        """)
-        
-        self.cmb_value = QComboBox()
-        self.cmb_value.setMinimumHeight(28)
-        self.cmb_value.setMaximumWidth(70)
-        self.cmb_value.setStyleSheet("""
-            QComboBox {
-                background-color: #FFFFFF;
-                color: #1F2937;
-                font-size: 12px;
-                border: 1px solid #D1D5DB;
-                border-radius: 4px;
-                padding: 2px 6px;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #FFFFFF;
-                selection-background-color: #D1D5DB;
-                selection-color: #374151;
-                font-size: 12px;
-            }
-            QComboBox QLineEdit {
-                alignment: AlignRight;
-            }
-        """)
-        
-        module_layout.addWidget(self.cmb_module, stretch=1)
-        module_layout.addWidget(self.cmb_value, stretch=0)
-        left_layout.addLayout(module_layout)
-        
-        self._prev_module_val = ""
-        self.cmb_module.currentIndexChanged.connect(self._on_module_selected)
-        self.cmb_value.currentIndexChanged.connect(self._on_value_selected)
-        
+        for key, info in self.MODULE_SWITCHES.items():
+            combo = QComboBox()
+
+            line_edit = QLineEdit()
+            line_edit.setAlignment(Qt.AlignCenter)
+            line_edit.setReadOnly(True) 
+            combo.setLineEdit(line_edit)
+
+            combo.addItems(info["values"])
+            combo.setToolTip(info["desc"])
+            combo.setStyleSheet("font-size: 12px; background-color: white;")
+            combo.currentIndexChanged.connect(self.mark_asdirty)
+            module_form_layout.addRow("📍" + key + ":" + info["desc"], combo)
+            self.module_widgets[key] = combo
+        left_layout.addLayout(module_form_layout)
+
+        # 구분선 추가
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setStyleSheet("margin-top: 5px; margin-bottom: 5px; color: #E5E7EB;")
+        left_layout.addWidget(separator)
+
+        # --- Output Options ---
+        left_layout.addWidget(QLabel("<b style='font-size:12px;'>⚙️ Output Options</b>"))
+        left_form_layout = QVBoxLayout()
+        left_form_layout.setContentsMargins(0, 0, 0, 0)
         form_param = QFormLayout()
         form_param.setSpacing(3)
         form_param.setContentsMargins(0, 0, 0, 0)
         
         # 입력 위젯 정의 및 기본값 셋팅
-        self.txt_tmax = QLineEdit(self.data_store.get("TMax", "600.0"))
-        self.txt_tmax.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.txt_dt = QLineEdit(self.data_store.get("DT", "0.0125"))
-        self.txt_dt.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.txt_tmax.textChanged.connect(self._on_tmax_dt_changed)
-        self.txt_dt.textChanged.connect(self._on_tmax_dt_changed)
+        self.txt_screen_step = QLineEdit()
+        self.txt_screen_step.setStyleSheet("background-color: white;")
+        self.txt_screen_step.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        self.txt_screen_step.textChanged.connect(self.on_output_changed)
 
-        form_param.addRow("", QLabel(""))  # 한 줄 띄우기        
-        form_param.addRow(QLabel("<h3><b>⚙️ Simulation Variables</b></h3>"))
-        form_param.addRow("⏱️ Total Time (TMax):", self.txt_tmax)
-        form_param.addRow("⏱️ Time Step (DT):", self.txt_dt)
+        self.txt_write_step = QLineEdit()
+        self.txt_write_step.setStyleSheet("background-color: white;")
+        self.txt_write_step.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        self.txt_write_step.textChanged.connect(self.on_output_changed)
+
+        self.txt_write_time = QLineEdit()
+        self.txt_write_time.setStyleSheet("background-color: white;")
+        self.txt_write_time.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        self.txt_write_time.textChanged.connect(self.on_output_changed)
         
-        form_param.addRow("", QLabel(""))  # 한 줄 띄우기
-        form_param.addRow(QLabel("<h3><b>⚙️ Initial Conditions</b></h3>"))
-        
-        self._ic_widgets = {}
-        ic_values = self._load_ic_from_edfile()
-        for key, desc in self.INITIAL_CONDITIONS.items():
-            val = ic_values.get(key, "0")
-            edit = QLineEdit(str(val))
-            edit.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            edit.textChanged.connect(self._on_ic_changed)
-            form_param.addRow(QLabel(f"📍 {key} ({desc})"), edit)
-            self._ic_widgets[key] = edit
-        
-        left_layout.addLayout(form_param)
-        left_layout.addStretch()  # 입력창들을 위로 밀착시킴
-        
-        bottom_btn_layout = QHBoxLayout()
-        bottom_btn_layout.setContentsMargins(0, 0, 0, 0)
-        bottom_btn_layout.setSpacing(6)
-        
-        self.btn_apply = QPushButton("Apply")
-        self.btn_apply.setMinimumHeight(38)
-        self.btn_apply.setMinimumWidth(230)
-        self._update_apply_button(active=False)
-        self.btn_apply.clicked.connect(self._on_apply_clicked)
-        bottom_btn_layout.addWidget(self.btn_apply, alignment=Qt.AlignLeft)
-        
-        self.btn_discard = QPushButton("Discard")
-        self.btn_discard.setMinimumHeight(38)
-        self.btn_discard.setMinimumWidth(230)
-        self.btn_discard.clicked.connect(self._on_discard_clicked)
-        bottom_btn_layout.addWidget(self.btn_discard, alignment=Qt.AlignRight)
-        
-        left_layout.addLayout(bottom_btn_layout)
-        
+        self.txt_write_binary = QLineEdit()
+        self.txt_write_binary.setStyleSheet("background-color: white;")
+        self.txt_write_binary.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)   
+        self.txt_write_binary.textChanged.connect(self.on_output_changed)
+
+        self.txt_write_digit = QLineEdit()
+        self.txt_write_digit.setStyleSheet("background-color: white;")
+        self.txt_write_digit.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        self.txt_write_digit.textChanged.connect(self.on_output_changed)
+
+        form_param.addRow(QLabel("⏱️ Screen Update Interval (SttsTime):", styleSheet="font-size: 12px;"), self.txt_screen_step)
+        form_param.addRow(QLabel("⏱️ File Write Time Step (DT_Out):", styleSheet="font-size: 12px;"), self.txt_write_step)
+        form_param.addRow(QLabel("⏱️ Start Time for Output (TStart):", styleSheet="font-size: 12px;"), self.txt_write_time)
+        form_param.addRow(QLabel("💾 Binary Output (OutFileFmt):", styleSheet="font-size: 12px;"), self.txt_write_binary)
+        form_param.addRow(QLabel("🔢 Output Precision (OutFmt):", styleSheet="font-size: 12px;"), self.txt_write_digit)
+        left_form_layout.addLayout(form_param)
+
+        left_layout.addLayout(left_form_layout)
+        left_layout.addStretch()
         main_splitter.addWidget(left_widget)
+# endregion ==============================================================================================================
 
-        # ================= [우측 영역] 시뮬레이션 진행 모니터링 패널 =================
+# region : [RIGHT SIDE] 시뮬레이션 변수 입력 패널 ============================================================================
         right_widget = QWidget()
-
-        # 콘솔 작동 제어용 실행/중지 버튼 배치
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(10, 0, 0, 0)
 
-        console_btn_layout = QHBoxLayout()
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("QScrollArea { border: none; }")
+        scroll_content = QWidget()
+        scroll_area.setWidget(scroll_content)
+        
+        right_form_layout = QVBoxLayout(scroll_content)
 
+        form_param = QFormLayout()
+        form_param.setSpacing(3)
+        form_param.setContentsMargins(10, 0, 0, 0)
+        
+        # 입력 위젯 정의 및 기본값 셋팅
+        self.txt_tmax = QLineEdit()
+        self.txt_tmax.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.txt_dt = QLineEdit()
+        self.txt_dt.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.txt_tmax.textChanged.connect(self.on_tmax_dt_changed)
+        self.txt_dt.textChanged.connect(self.on_tmax_dt_changed)
 
+        right_form_layout.addWidget(QLabel("<b style='font-size:12px;'>⚙️ Simulation Control</b>"))
+        form_param.addRow(QLabel("⏱️ Total Time (TMax):", styleSheet="font-size: 12px;"), self.txt_tmax)
+        form_param.addRow(QLabel("⏱️ Time Step (DT):", styleSheet="font-size: 12px;"), self.txt_dt)
+        right_form_layout.addLayout(form_param)
+
+        # 옅은 회색 구분선 추가
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setStyleSheet("margin-top: 5px; margin-bottom: 5px; color: #E5E7EB;")
+        right_form_layout.addWidget(separator)
+
+        # Initial Conditions 텍스트
+        right_form_layout.addWidget(QLabel("<b style='font-size:12px;'>⚙️ Initial Conditions</b>"))
+
+        # Initial Conditions 항목 리스트
+        ic_form_layout = QFormLayout()
+        ic_form_layout.setSpacing(3)
+        ic_form_layout.setContentsMargins(0, 0, 0, 0)
+        self.ic_widgets = {}
+        for key, info in self.INITIAL_CONDITIONS.items():
+            edit = QLineEdit() # 빈 위젯으로 먼저 생성
+            edit.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            edit.textChanged.connect(self.on_ic_changed)
+            ic_label = QLabel(f"📍 {key} ({info['desc']})")
+            ic_label.setStyleSheet("font-size: 12px;")
+            ic_form_layout.addRow(ic_label, edit)
+            self.ic_widgets[key] = edit
+        right_form_layout.addLayout(ic_form_layout)
+        right_form_layout.addStretch()
+        right_layout.addWidget(scroll_area)
         main_splitter.addWidget(right_widget)
-
-        # 💡 보내주신 요구사항 비율(좌측 450px : 우측 650px) 고정 및 메인 장착
-        main_splitter.setSizes([450, 650])
+        
         main_layout.addWidget(main_splitter)
+        main_splitter.setSizes([400, 500])
 
-        self.refresh_module_switches()
-
+        # self.refresh_values_from_file() # on_tab_enter에서 호출되므로 여기서 제거
+# endregion ============================================================================================================
 
 
     def on_tab_leave(self):
         """ Main 탭을 떠날 때 변경사항 저장 여부 확인 """
-        if self.is_dirty():
+        if self.isdirty():
             main_win = self.window()
             if main_win:
-                summary = self._change_summary()
+                summary = self.change_summary()
                 reply = QMessageBox.question(
                     main_win,
                     "변경사항 저장",
@@ -219,40 +301,39 @@ class MainTab(QWidget):
                     QMessageBox.Yes
                 )
                 if reply == QMessageBox.Yes:
-                    self.apply_module_switches()
+                    self.apply_changed_parameters()
                 else:
-                    self.revert_module_switches()
+                    self.discard_changes()
 
-    def _change_summary(self):
+    def change_summary(self):
         parts = []
-        for key in self.MODULE_SWITCHES:
-            orig = self._original_switches.get(key, "")
-            curr = OpenFastIO.current_config.get(key, {}).get("current") or OpenFastIO.current_config.get(key, {}).get("default") or "0"
-            if orig != curr:
+        for key, info in self.module_switches_data.items():
+            orig = info.get("value", "0")
+            curr = self.module_widgets[key].currentText()
+            if orig != curr: 
                 parts.append(f"- {key}: {orig} -> {curr}")
-        if self._original_tmax != self.txt_tmax.text():
-            parts.append(f"- TMax: {self._original_tmax} -> {self.txt_tmax.text()}")
-        if self._original_dt != self.txt_dt.text():
-            parts.append(f"- DT: {self._original_dt} -> {self.txt_dt.text()}")
-        for key in self.INITIAL_CONDITIONS:
-            orig = self._original_ic.get(key, "")
-            curr = self._ic_widgets[key].text()
-            if orig != curr:
+
+        if self.main_fst_keys_data["TMax"]["value"]                  != self.txt_tmax.text():         parts.append(f"- TMax: {self.main_fst_keys_data['TMax']['value']} -> {self.txt_tmax.text()}")
+        if self.main_fst_keys_data["DT"]["value"]                    != self.txt_dt.text():           parts.append(f"- DT: {self.main_fst_keys_data['DT']['value']} -> {self.txt_dt.text()}")
+        if self.main_fst_keys_data["Description"]["value"]           != self.txt_description.text():  parts.append(f"- Description: ... -> ...")
+        if str(self.main_fst_keys_data["Echo"]["value"]).lower()     != str(self.chk_echo.isChecked()).lower():       parts.append(f"- Echo: {self.main_fst_keys_data['Echo']['value']} -> {self.chk_echo.isChecked()}")
+        if str(self.main_fst_keys_data["SumPrint"]["value"]).lower() != str(self.chk_sumprint.isChecked()).lower():   parts.append(f"- SumPrint: {self.main_fst_keys_data['SumPrint']['value']} -> {self.chk_sumprint.isChecked()}")
+        if self.main_fst_keys_data["SttsTime"]["value"]              != self.txt_screen_step.text():  parts.append(f"- SttsTime: {self.main_fst_keys_data['SttsTime']['value']} -> {self.txt_screen_step.text()}")
+        if self.main_fst_keys_data["DT_Out"]["value"]                != self.txt_write_step.text():   parts.append(f"- DT_Out: {self.main_fst_keys_data['DT_Out']['value']} -> {self.txt_write_step.text()}")
+        if self.main_fst_keys_data["TStart"]["value"]                != self.txt_write_time.text():   parts.append(f"- TStart: {self.main_fst_keys_data['TStart']['value']} -> {self.txt_write_time.text()}")
+        if self.main_fst_keys_data["OutFileFmt"]["value"]            != self.txt_write_binary.text(): parts.append(f"- OutFileFmt: {self.main_fst_keys_data['OutFileFmt']['value']} -> {self.txt_write_binary.text()}")
+        if self.main_fst_keys_data["OutFmt"]["value"]                != self.txt_write_digit.text():  parts.append(f"- OutFmt: {self.main_fst_keys_data['OutFmt']['value']} -> {self.txt_write_digit.text()}")
+
+        for key, info in self.initial_conditions_data.items():
+            orig = info.get("value", "")
+            curr = self.ic_widgets[key].text()
+            if orig != curr: 
                 parts.append(f"- {key}: {orig} -> {curr}")
+
         return "\n".join(parts) if parts else "변경된 내용이 없습니다."
 
-    def refresh_ui(self):
-        """ 독립 위젯이 되면서 동적 레이아웃 재생성이 필요 없어졌습니다. 데이터 동기화가 필요하면 활용하세요. """
-        pass
 
-    def collect_inputs(self):
-        """ 입력 데이터 취합 함수 """
-        return {
-            "TMax": self.txt_tmax.text(),
-            "DT": self.txt_dt.text()
-        }
-
-    def _load_ic_from_edfile(self):
+    def load_ic_from_edfile(self): # _load_ic_from_edfile에서 이름 변경
         main_fst = OpenFastIO.current_config.get("MainFST", {}).get("current", "").strip()
         ed_name = (
             OpenFastIO.current_config.get("EDFile", {}).get("current")
@@ -265,191 +346,234 @@ class MainTab(QWidget):
         if not os.path.exists(ed_path):
             return {key: "0" for key in self.INITIAL_CONDITIONS}
 
-        result = {key: "0" for key in self.INITIAL_CONDITIONS}
+        result = {key: {"value": "0"} for key in self.INITIAL_CONDITIONS}
         try:
             with open(ed_path, "r", encoding="utf-8", errors="ignore") as f:
                 for line in f:
                     parts = line.strip().split()
-                    if len(parts) >= 2 and parts[0].isdigit() and parts[1] in result:
-                        result[parts[1]] = parts[0]
+                    # parts[0]이 숫자이고 parts[1]이 INITIAL_CONDITIONS의 키에 해당하는 경우
+                    if len(parts) >= 2 and parts[1] in result:
+                        result[parts[1]]["value"] = parts[0].strip('"\'') # value 필드에 값 저장
         except Exception:
             pass
         return result
 
-    def refresh_module_switches(self):
+    def load_main_from_fst(self):
+        """ MAIN_FST_KEYS에 정의된 주요 파라미터들을 메인 .fst 파일에서 직접 읽어옵니다. """
+        main_fst = OpenFastIO.current_config.get("MainFST", {}).get("current", "").strip()
+        if not main_fst or not os.path.exists(main_fst):
+            return {key: {"value": info["value"]} for key, info in self.main_fst_keys_data.items()}
+
+        result = {key: {"value": info["value"]} for key, info in self.main_fst_keys_data.items()}
+        try:
+            with open(main_fst, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+                if len(lines) > 1:
+                    result["Description"]["value"] = lines[1].strip()
+
+                for line in lines:
+                    parts = line.strip().split()
+                    if len(parts) < 2:
+                        continue
+                    
+                    key = parts[1]
+                    if key in result: # MAIN_FST_KEYS에 정의된 키인 경우
+                        value = parts[0].strip()
+                        result[key]["value"] = value
+        except Exception:
+            pass
+        return result
+    
+    def refresh_values_from_file(self):
         """ 콤보박스 항목을 OpenFastIO.current_config 기준으로 갱신 """
-        self.cmb_module.blockSignals(True)
-        self.cmb_value.blockSignals(True)
+        # Block signals for all module widgets
+        widgets_to_block = list(self.module_widgets.values()) + list(self.ic_widgets.values()) + \
+                           [self.txt_tmax, self.txt_dt, self.txt_description, self.chk_echo, self.chk_sumprint, self.txt_screen_step, self.txt_write_step, self.txt_write_time, self.txt_write_binary, self.txt_write_digit]
+        for widget in widgets_to_block:
+            widget.blockSignals(True)
         
-        self.cmb_module.clear()
+        main_fst_data = self.load_main_from_fst()
+
+        main_fst_path = OpenFastIO.current_config.get("MainFST", {}).get("current", "")
+        if main_fst_path and os.path.exists(main_fst_path):
+            self.lbl_file_path.setText(main_fst_path)
+        else:
+            self.lbl_file_path.setText("N/A")
+
+        # Update self.main_fst_keys_data with loaded values
+        for key, data in main_fst_data.items():
+            if key in self.main_fst_keys_data:
+                self.main_fst_keys_data[key]["value"] = data["value"]
+
+        description = self.main_fst_keys_data["Description"]["value"]
+        self.txt_description.setText(description)
+
+        echo_val = str(self.main_fst_keys_data["Echo"]["value"]).lower() == "true"
+        sumprint_val = str(self.main_fst_keys_data["SumPrint"]["value"]).lower() == "true"
+        self.chk_echo.setChecked(echo_val)
+        self.chk_sumprint.setChecked(sumprint_val)
+
+        tmax = self.main_fst_keys_data["TMax"]["value"]
+        dt = self.main_fst_keys_data["DT"]["value"]
+        self.txt_tmax.setText(tmax)
+        self.txt_dt.setText(dt)
         
-        for key in self.MODULE_SWITCHES:
+        sttstime = self.main_fst_keys_data["SttsTime"]["value"]
+        dt_out = self.main_fst_keys_data["DT_Out"]["value"]
+        tstart = self.main_fst_keys_data["TStart"]["value"]
+        outfilefmt = self.main_fst_keys_data["OutFileFmt"]["value"]
+        outfmt = self.main_fst_keys_data["OutFmt"]["value"]
+        
+        self.txt_screen_step.setText(sttstime)
+        self.txt_write_step.setText(dt_out)
+        self.txt_write_time.setText(tstart)
+        self.txt_write_binary.setText(outfilefmt)
+        self.txt_write_digit.setText(outfmt)
+        for key, combo in self.module_widgets.items():
             cfg = OpenFastIO.current_config.get(key, {})
             val = cfg.get("current") or cfg.get("default") or "0"
-            desc = self.MODULE_SWITCHES[key].get("desc", "")
-            self.cmb_module.addItem(f"{key} : {val} ({desc})", key)
-        
-        if self.cmb_module.count() > 0:
-            self.cmb_module.setCurrentIndex(0)
-            self._sync_module_ui()
-        
-        self.cmb_module.blockSignals(False)
-        self.cmb_value.blockSignals(False)
+            self.module_switches_data[key]["value"] = val # 원본 값 저장
+            if combo.findText(val) != -1:
+                combo.setCurrentText(val)
+            else:
+                combo.setCurrentIndex(0)
 
-        self._original_switches = {
-            key: (OpenFastIO.current_config.get(key, {}).get("current") or OpenFastIO.current_config.get(key, {}).get("default") or "0")
-            for key in self.MODULE_SWITCHES
-        }
-        ic_values = self._load_ic_from_edfile()
-        self._original_ic = {key: ic_values.get(key, "0") for key in self.INITIAL_CONDITIONS}
+        # Unblock signals
+        for widget in widgets_to_block:
+            widget.blockSignals(False)
+            
+        # --- 원본 값 저장 (변경사항 추적용) ---
+        ic_values = self.load_ic_from_edfile()
+        self.initial_conditions_data = ic_values
         for key in self.INITIAL_CONDITIONS:
-            if key in self._ic_widgets:
-                self._ic_widgets[key].blockSignals(True)
-                self._ic_widgets[key].setText(ic_values.get(key, "0"))
-                self._ic_widgets[key].blockSignals(False)
-        self._original_tmax = self.txt_tmax.text()
-        self._original_dt = self.txt_dt.text()
+            if key in self.ic_widgets:
+                self.ic_widgets[key].blockSignals(True)
+                self.ic_widgets[key].setText(ic_values.get(key, {}).get("value", "0"))
+                self.ic_widgets[key].blockSignals(False)
         self._dirty = False
-        self._update_apply_button(active=False)
+        self.update_apply_button(active=False)
 
-    def _on_module_selected(self, index):
-        """ 콤보박스 선택 변경 시 값 콤보 및 설명 동기화 """
-        if index < 0:
-            return
-        self._sync_module_ui()
+    def on_tab_enter(self):
+        """ 탭에 들어올 때마다 UI를 새로고침합니다. """
+        self.refresh_values_from_file()
 
-    def _sync_module_ui(self):
-        index = self.cmb_module.currentIndex()
-        if index < 0:
-            return
-        key = self.cmb_module.itemData(index)
-        cfg = OpenFastIO.current_config.get(key, {})
-        val = cfg.get("current") or cfg.get("default") or "0"
-        
-        allowed = self.MODULE_SWITCHES.get(key, {}).get("values", [])
-        self.cmb_value.blockSignals(True)
-        self.cmb_value.clear()
-        self.cmb_value.addItems(allowed)
-        if val in allowed:
-            self.cmb_value.setCurrentText(val)
-        elif allowed:
-            self.cmb_value.setCurrentIndex(0)
-        self.cmb_value.blockSignals(False)
-        self._prev_module_val = val
+    def mark_asdirty(self, *args): # _on_value_changed에서 이름 변경
+        self.dirty = True
+        self.update_apply_button(active=True)
 
-    def _on_value_selected(self, index):
-        """ 값 콤보 선택 변경 시 current_config 및 모듈 콤보 텍스트 갱신 """
-        if index < 0:
-            return
-        key = self.cmb_module.currentData()
-        if not key or key not in self.MODULE_SWITCHES:
-            return
-        text = self.cmb_value.currentText()
-        allowed = self.MODULE_SWITCHES[key]["values"]
-        if text in allowed:
-            OpenFastIO.current_config[key]["current"] = text
-            self._prev_module_val = text
-            self.cmb_module.setItemText(self.cmb_module.currentIndex(), f"{key} : {text} ({self.MODULE_SWITCHES[key].get('desc', '')})")
-            self._dirty = True
-            self._update_apply_button(active=True)
+    def on_tmax_dt_changed(self, text):
+        self.dirty = True
+        self.update_apply_button(active=True)
 
-    def _on_tmax_dt_changed(self, text):
-        self._dirty = True
-        self._update_apply_button(active=True)
+    def on_output_changed(self, text):
+        self.dirty = True
+        self.update_apply_button(active=True)
 
-    def _on_ic_changed(self, text):
-        self._dirty = True
-        self._update_apply_button(active=True)
+    def on_ic_changed(self, text):
+        self.dirty = True
+        self.update_apply_button(active=True)
 
-    def _on_apply_clicked(self):
-        if self.is_dirty():
-            result = self.apply_module_switches()
+    def on_apply_clicked(self):
+        if self.isdirty(): # isdirty에서 이름 변경
+            result = self.apply_values_to_file()
             if result:
-                self._update_apply_button(active=False)
+                self.update_apply_button(active=False)
 
-    def _on_discard_clicked(self):
-        self.revert_module_switches()
-        self._update_apply_button(active=False)
+    def on_discard_clicked(self):
+        self.discard_changes() # discard_change에서 이름 변경
+        self.update_apply_button(active=False)
 
-    def _update_apply_button(self, active):
+    def update_apply_button(self, active):
         style_active = """
             QPushButton {
                 background-color: #2563EB;
-                color: #FFFFFF;
-                font-weight: bold;
-                font-size: 12px;
+                color: #FFFFFF; font-weight: bold; font-size: 14px; padding: 6px 22px;
                 border: 1px solid #1D4ED8;
                 border-radius: 4px;
-                padding: 6px 12px;
             }
             QPushButton:hover { background-color: #1D4ED8; }
         """
         style_inactive = """
             QPushButton {
                 background-color: #E5E7EB;
-                color: #374151;
-                font-weight: bold;
-                font-size: 12px;
+                color: #9CA3AF; font-weight: bold; font-size: 14px; padding: 6px 22px;
                 border: 1px solid #D1D5DB;
                 border-radius: 4px;
-                padding: 6px 12px;
             }
-            QPushButton:hover { background-color: #D1D5DB; }
         """
         style = style_active if active else style_inactive
-        if hasattr(self, 'btn_apply'):
-            self.btn_apply.setStyleSheet(style)
-        if hasattr(self, 'btn_discard'):
-            self.btn_discard.setStyleSheet(style)
+        self.btn_apply.setStyleSheet(style)
+        self.btn_discard.setStyleSheet(style)
 
-    def is_dirty(self):
-        return self._dirty
+    def isdirty(self): # isdirty에서 이름 변경
+        return self.dirty
 
-    def apply_module_switches(self):
+    def apply_values_to_file(self):
         """ 변경된 스위치 값을 메인 .fst 파일에 저장하고, Initial Conditions는 EDFile에 저장 """
         main_fst = OpenFastIO.current_config.get("MainFST", {}).get("current", "")
         if not main_fst or not os.path.exists(main_fst):
             return False
 
         updated_data = {
-            key: (OpenFastIO.current_config.get(key, {}).get("current") or OpenFastIO.current_config.get(key, {}).get("default") or "0")
-            for key in self.MODULE_SWITCHES
+            key: combo.currentText()
+            for key, combo in self.module_widgets.items()
         }
         updated_data["TMax"] = self.txt_tmax.text()
         updated_data["DT"] = self.txt_dt.text()
-        fst_result = OpenFastIO.save_module_data(main_fst, updated_data)
+        updated_data["Echo"] = str(self.chk_echo.isChecked()).lower()
+        updated_data["SumPrint"] = str(self.chk_sumprint.isChecked()).lower()
+        updated_data["SttsTime"] = self.txt_screen_step.text()
+        updated_data["DT_Out"] = self.txt_write_step.text()
+        updated_data["TStart"] = self.txt_write_time.text()
+        updated_data["OutFileFmt"] = self.txt_write_binary.text()
+        updated_data["OutFmt"] = self.txt_write_digit.text()
+        # Description은 특수 처리
+        fst_result = OpenFastIO.save_module_data(main_fst, updated_data, description=self.txt_description.text()) # save_module_data에 description 전달
 
         ed_name = (
-            OpenFastIO.current_config.get("EDFile", {}).get("current")
+            OpenFastIO.current_config.get("EDFile", {}).get("current", "")
             or OpenFastIO.current_config.get("EDFile", {}).get("default", "")
         )
         ed_result = True
         if ed_name:
             ed_path = OpenFastIO.get_absolute_path(main_fst, ed_name)
             if os.path.exists(ed_path):
-                ic_data = {key: self._ic_widgets[key].text() for key in self.INITIAL_CONDITIONS}
+                ic_data = {key: self.ic_widgets[key].text() for key in self.INITIAL_CONDITIONS}
                 ed_result = OpenFastIO.save_module_data(ed_path, ic_data)
 
         if fst_result and ed_result:
-            self._dirty = False
+            self.dirty = False
+            self.refresh_values_from_file() # 저장 후 원본 값들을 다시 로드하여 동기화
         return fst_result and ed_result
 
-    def revert_module_switches(self):
+    def discard_changes(self): 
         """ 콤보박스 변경사항을 원래 상태로 되돌림 """
-        for key, val in self._original_switches.items():
-            if key in OpenFastIO.current_config:
-                OpenFastIO.current_config[key]["current"] = val
-        self.txt_tmax.blockSignals(True)
-        self.txt_dt.blockSignals(True)
-        self.txt_tmax.setText(self._original_tmax)
-        self.txt_dt.setText(self._original_dt)
-        self.txt_tmax.blockSignals(False)
-        self.txt_dt.blockSignals(False)
-        for key, val in self._original_ic.items():
-            if key in self._ic_widgets:
-                self._ic_widgets[key].blockSignals(True)
-                self._ic_widgets[key].setText(val)
-                self._ic_widgets[key].blockSignals(False)
-        self.refresh_module_switches()
+        # Block signals for all module widgets
+        widgets_to_revert = list(self.module_widgets.values()) + list(self.ic_widgets.values()) + \
+                            [self.txt_tmax, self.txt_dt, self.txt_description, self.chk_echo, self.chk_sumprint, self.txt_screen_step, self.txt_write_step, self.txt_write_time, self.txt_write_binary, self.txt_write_digit]
+        for widget in widgets_to_revert:
+            widget.blockSignals(True)
 
+        self.txt_description.setText(self.main_fst_keys_data["Description"]["value"])
+        self.chk_echo.setChecked(str(self.main_fst_keys_data["Echo"]["value"]).lower() == 'true')
+        self.chk_sumprint.setChecked(str(self.main_fst_keys_data["SumPrint"]["value"]).lower() == 'true')
+        self.txt_tmax.setText(self.main_fst_keys_data["TMax"]["value"])
+        self.txt_dt.setText(self.main_fst_keys_data["DT"]["value"])
+        self.txt_screen_step.setText(self.main_fst_keys_data["SttsTime"]["value"])
+        self.txt_write_step.setText(self.main_fst_keys_data["DT_Out"]["value"])
+        self.txt_write_time.setText(self.main_fst_keys_data["TStart"]["value"])
+        self.txt_write_binary.setText(self.main_fst_keys_data["OutFileFmt"]["value"])
+        self.txt_write_digit.setText(self.main_fst_keys_data["OutFmt"]["value"])
 
+        for key, info in self.initial_conditions_data.items():
+            if key in self.ic_widgets:
+                self.ic_widgets[key].setText(info.get("value", "0"))
+
+        for key, combo in self.module_widgets.items():
+            combo.setCurrentText(self.module_switches_data[key].get("value", "0"))
+
+        for widget in widgets_to_revert:
+            widget.blockSignals(False)
+
+        self._dirty = False
+        self.update_apply_button(active=False)

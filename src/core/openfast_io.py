@@ -1,5 +1,6 @@
 import os
 import copy
+import re
 
 class OpenFastIO:
     """ OpenFAST 파일들의 실제 데이터를 가상으로 읽고 쓰는 엔진 """
@@ -124,7 +125,7 @@ class OpenFastIO:
                 for i in range(1, num_af + 1):
                     target_idx = af_start_line + i
                     if target_idx < len(lines):
-                        next_parts = lines[target_idx].strip().split()
+                        next_parts = lines[target_idx].strip().split() # AFFileList는 파일 경로만 있으므로 parts[0]만 사용
                         if next_parts:
                             result_list.append(cls.get_absolute_path(file_path, next_parts[0].strip('"').strip("'")))
 
@@ -208,7 +209,7 @@ class OpenFastIO:
         }
 
     @staticmethod
-    def save_module_data(file_path, updated_data):
+    def save_module_data(file_path, updated_data, description=None):
         """ UI에서 수정한 딕셔너리 데이터를 받아 실제 텍스트 파일로 저장 """
         if not file_path or not os.path.exists(file_path):
             print(f"❌ [저장 실패] 파일이 존재하지 않습니다: {file_path}")
@@ -222,28 +223,44 @@ class OpenFastIO:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
 
+            new_lines = list(lines) # 원본 라인의 복사본을 만듭니다.
+
+            # Description은 두 번째 줄에 위치하므로 특별 처리
+            if description is not None and len(lines) > 1:
+                new_lines[1] = description + "\n"
+
             for key, new_val in updated_data.items():
-                for i, line in enumerate(lines):
-                    stripped = line.lstrip()
+                for i, line in enumerate(new_lines):
+                    # Description은 이미 처리되었으므로 건너뜁니다.
+                    if i == 1 and description is not None:
+                        continue
+
+                    stripped = line.strip()
                     if not stripped:
                         continue
 
-                    parts = stripped.split()
-                    if len(parts) < 2 or parts[1] != key:
-                        continue
-
-                    leading = line[:len(line) - len(stripped)]
-                    remainder = stripped[len(parts[0]):]
-                    lines[i] = leading + str(new_val) + remainder
-                    break
+                    # 키가 라인에 포함되어 있고, 주석 라인이 아닌 경우 (-------)
+                    if key in line and "-------" not in line:
+                        # 키워드 앞의 값 부분을 찾기 위한 정규식 (숫자 또는 따옴표로 묶인 문자열)
+                        # 예: "   5   SttsTime" -> "   5"
+                        # 예: '"ES10.3E2"   OutFmt' -> '"ES10.3E2"'
+                        match = re.match(r'^\s*(".*?"|\'.*?\'|\S+)\s+' + re.escape(key), stripped)
+                        if match:
+                            old_value_str = match.group(1)
+                            leading_whitespace = line[:len(line) - len(line.lstrip())]
+                            # 새 값으로 교체하고 줄의 나머지 부분 유지
+                            # 값을 10자리로 맞추고, 나머지 부분은 그대로 유지합니다.
+                            remainder = line.split(key, 1)[1]
+                            new_lines[i] = f"{str(new_val):<12}{key}{remainder}"
+                            break # 키를 찾아서 업데이트했으면 다음 키로 넘어감
 
             with open(file_path, 'w', encoding='utf-8') as f:
-                f.writelines(lines)
+                f.writelines(new_lines)
 
             print(f"💾 [저장 완료] 파일: {file_path}")
             print(f"📝 [변경 내용]: {updated_data}")
             return True
 
         except Exception as e:
-            print(f"❌ [저장 실패] {e}")
+            print(f"❌ [저장 실패] 파일: {file_path}, 오류: {e}")
             return False
