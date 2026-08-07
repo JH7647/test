@@ -29,6 +29,7 @@ class MainWindow(QMainWindow):
 
         # 마스터 탭 위젯 정의
         self.tab_widget = QTabWidget()
+        self.tab_widget.setMovable(True)
         
         # 탐색용 디렉토리 트리 구조 탭
         self.tab_files = QWidget()
@@ -51,9 +52,10 @@ class MainWindow(QMainWindow):
         # 메인 프레임 레이아웃에 탭 순차 바인딩
         self.tab_widget.addTab(self.pane_files, "📁 Files")
         self.tab_widget.addTab(self.pane_main, "⚙️ Main")
+        self.tab_widget.addTab(self.pane_wind, "💨 Wind")
         self.tab_widget.addTab(self.pane_plot, "📊 Plot Data")    
         self.tab_widget.addTab(self.pane_aero, "🦅 AeroDyn")    
-        self.tab_widget.addTab(self.pane_wind, "💨 Wind")
+
         # self.tab_widget.addTab(self.tab_elasto, "💪 Elasto")
         # self.tab_widget.addTab(self.tab_servo, "🔌 Servo")
         # self.tab_widget.addTab(self.tab_seast, "🌊 SeaSt")
@@ -93,15 +95,16 @@ class MainWindow(QMainWindow):
         self._current_tab_index = index
 
         old_widget = self.tab_widget.widget(old_index)
-        new_widget = self.tab_widget.widget(index)
 
         if old_widget and hasattr(old_widget, "on_tab_leave"):
             old_widget.on_tab_leave()
 
+        new_widget = self.tab_widget.widget(index)
         if new_widget and hasattr(new_widget, "on_tab_enter"):
             new_widget.on_tab_enter()
 
     def closeEvent(self, event):
         """윈도우 종료 시 실행 중인 모든 프로세스를 정리합니다."""
-        self.pane_files.cleanup_processes()
+        if hasattr(self.pane_files, 'cleanup_processes'):
+            self.pane_files.cleanup_processes()
         event.accept()

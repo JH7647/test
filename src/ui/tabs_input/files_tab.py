@@ -383,6 +383,15 @@ class FilesTab(QWidget):
         right_vsplitter.addWidget(right_bottom_widget)
         right_vsplitter.setSizes([500, 300])
         splitter.addWidget(right_vsplitter)
+
+    def on_tab_enter(self):
+        """ Files 탭에 진입할 때마다 UI를 새로고침합니다. """
+        settings = QSettings("JHLEE", "OFA")
+        last_fst_path = settings.value("LastFstPath_fst", "")
+        if last_fst_path and os.path.exists(last_fst_path):
+            self.dir_tree_update(last_fst_path)
+            self.update_model_tree(last_fst_path)
+
 # endregion : =====================================================
 
 

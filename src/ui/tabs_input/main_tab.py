@@ -1,4 +1,5 @@
 import os
+import subprocess
 from sqlite3 import Time
 from PySide6.QtWidgets import (QWidget, QFormLayout, QLineEdit, QLabel, QTextEdit, 
                                QPushButton, QHBoxLayout, QVBoxLayout, QSplitter, QComboBox, QCheckBox, QScrollArea, QFrame)
@@ -61,12 +62,10 @@ class MainTab(QWidget):
         self.module_switches_data = copy.deepcopy(self.MODULE_SWITCHES)
         self.initial_conditions_data = copy.deepcopy(self.INITIAL_CONDITIONS)
         self.main_fst_keys_data = copy.deepcopy(self.MAIN_FST_KEYS)
-        
-        # 최초 1회 화면 구조를 완벽하게 조립합니다.
+
         self.init_ui()
+
     def init_ui(self):
-        """ 좌측 변수 입력 패널과 우측 콘솔 패널을 완전히 독립적으로 배치 """
-        # 메인 가로 레이아웃
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(10, 10, 10, 10)
 
@@ -75,11 +74,12 @@ class MainTab(QWidget):
         top_bar_layout.setSpacing(15)
 
         # --- 1. 파일 경로 ---
+        lbl_filename = QLabel("📝 File Name:")
+        lbl_filename.setStyleSheet("font-weight: bold; font-size: 14px;")
         self.lbl_file_path = QLabel("N/A")
         self.lbl_file_path.setStyleSheet("font-weight: bold; font-size: 14px;")
-        lbl_filename_title = QLabel("📝 File Name:")
-        lbl_filename_title.setStyleSheet("font-weight: bold; font-size: 14px;")
-        top_bar_layout.addWidget(lbl_filename_title)
+        self.lbl_file_path.mouseDoubleClickEvent = self.open_file_in_editor
+        top_bar_layout.addWidget(lbl_filename)
         top_bar_layout.addWidget(self.lbl_file_path, 1)
         top_bar_layout.addStretch()
 
@@ -101,58 +101,56 @@ class MainTab(QWidget):
         # 좌우 조절용 가로형 스플리터 생성
         main_splitter = QSplitter(Qt.Horizontal)
 
-# region : [LEFT SIDE] Description, Toggles, Module Switches ====================================================================================================
+# region : [LEFT SIDE] Description, Toggles, Module Switches 
+# ====================================================================================================
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
-        left_widget.setStyleSheet("background-color: #F0F0F0;") # 연한 회색 배경 적용
         left_layout.setContentsMargins(10, 10, 10, 0)
         left_layout.setSpacing(3)
 
-        left_layout.addWidget(QLabel("<b style='font-size:12px;'>⚙️ General Settings</b>")) 
+        main_left_form = QFormLayout()
+        main_left_form.setSpacing(3)
+        main_left_form.setContentsMargins(0, 0, 0, 0)
 
-        # --- Description, Echo, SumPrint ---
-        general_form_layout = QFormLayout()
-        general_form_layout.setSpacing(3)
-        
-        lbl_desc_title = QLabel("📍Description :")
+        # --- Section 1: General Settings ---
+        gs_title = QLabel("<b>⚙️ General Settings</b>")
+        gs_title.setStyleSheet("font-size: 12px; margin-bottom: 3px;")
+        main_left_form.addRow(gs_title)
+
+        lbl_file_description = QLabel("📍Description :")
+        lbl_file_description.setStyleSheet("font-size: 12px;")
         self.txt_description = QLineEdit()
         self.txt_description.setStyleSheet("font-size: 12px; background-color: white;")
         self.txt_description.textChanged.connect(self.mark_asdirty)
-        general_form_layout.addRow(lbl_desc_title, self.txt_description)
+        main_left_form.addRow(lbl_file_description, self.txt_description)
 
-        self.chk_echo = QCheckBox("Echo")
-        self.chk_echo.setToolTip("Echo input file parameters to <RootName>.ech")
-        self.chk_echo.setStyleSheet("font-size: 12px; background: transparent;")
-
-        # 윈도우 테마 버그를 우회하고 사각 박스 레이아웃을 고정합니다.
-        self.chk_echo.setStyle(QStyleFactory.create("Fusion")) 
-        self.chk_echo.checkStateChanged.connect(self.mark_asdirty)
-        general_form_layout.addRow("📍Echo file ", self.chk_echo)
-
-        self.chk_sumprint = QCheckBox("SumPrint")
-        self.chk_sumprint.setToolTip("Print summary data to <RootName>.sum")
-        self.chk_sumprint.setStyleSheet("font-size: 12px; background: transparent;")
+        self.chk_echo = QCheckBox("Create file when check")
+        self.chk_echo.setStyleSheet("font-size: 12px;")
+        self.chk_echo.stateChanged.connect(self.mark_asdirty)
         
-        self.chk_sumprint.setStyle(QStyleFactory.create("Fusion")) 
-        self.chk_sumprint.checkStateChanged.connect(self.mark_asdirty)
-        general_form_layout.addRow("📍Summary file ", self.chk_sumprint)
+        lbl_echo = QLabel("📍Echo file (Echo) ")
+        lbl_echo.setStyleSheet("font-size: 12px;")
+        main_left_form.addRow(lbl_echo, self.chk_echo)
 
+        self.chk_sumprint = QCheckBox("Create file when check")
+        self.chk_sumprint.setStyleSheet("font-size: 12px;")
+        self.chk_sumprint.stateChanged.connect(self.mark_asdirty)
+        
+        lbl_sum = QLabel("📍Summary file (SumPrint) ")
+        lbl_sum.setStyleSheet("font-size: 12px;")
+        main_left_form.addRow(lbl_sum, self.chk_sumprint)
 
-        left_layout.addLayout(general_form_layout)
-
-        # 구분선 추가
+        # Separator line for visual separation
         separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        separator.setStyleSheet("margin-top: 5px; margin-bottom: 5px; color: #E5E7EB;")
-        left_layout.addWidget(separator)
+        separator.setStyleSheet("background-color: #C1C5CB; min-height: 1px; max-height: 1px; margin: 5px 0; border: none;")
+        main_left_form.addRow(separator)
 
-        # --- Module Switches ---
-        left_layout.addWidget(QLabel("<b style='font-size:12px;'>⚙️ Module Switches</b>"))
-        self.module_widgets = {}
-        module_form_layout = QFormLayout()
-        module_form_layout.setSpacing(5)
+        # --- Section 2: Module Switches ---
+        ms_title = QLabel("<b>⚙️ Module Switches</b>")
+        ms_title.setStyleSheet("font-size: 12px; margin-bottom: 3px;")
+        main_left_form.addRow(ms_title)
         
+        self.module_widgets = {}
         for key, info in self.MODULE_SWITCHES.items():
             combo = QComboBox()
 
@@ -165,24 +163,21 @@ class MainTab(QWidget):
             combo.setToolTip(info["desc"])
             combo.setStyleSheet("font-size: 12px; background-color: white;")
             combo.currentIndexChanged.connect(self.mark_asdirty)
-            module_form_layout.addRow("📍" + key + ":" + info["desc"], combo)
+            
+            ms_label = QLabel(f"📍 {key} : {info['desc']}")
+            ms_label.setStyleSheet("font-size: 12px;")
+            main_left_form.addRow(ms_label, combo)
             self.module_widgets[key] = combo
-        left_layout.addLayout(module_form_layout)
 
-        # 구분선 추가
+        # Separator line for visual separation
         separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        separator.setStyleSheet("margin-top: 5px; margin-bottom: 5px; color: #E5E7EB;")
-        left_layout.addWidget(separator)
+        separator.setStyleSheet("background-color: #C1C5CB; min-height: 1px; max-height: 1px; margin: 5px 0; border: none;")
+        main_left_form.addRow(separator)
 
-        # --- Output Options ---
-        left_layout.addWidget(QLabel("<b style='font-size:12px;'>⚙️ Output Options</b>"))
-        left_form_layout = QVBoxLayout()
-        left_form_layout.setContentsMargins(0, 0, 0, 0)
-        form_param = QFormLayout()
-        form_param.setSpacing(3)
-        form_param.setContentsMargins(0, 0, 0, 0)
+        # --- Section 3: Output Options ---
+        oo_title = QLabel("<b>⚙️ Output Options</b>")
+        oo_title.setStyleSheet("font-size: 12px; margin-bottom: 3px;")
+        main_left_form.addRow(oo_title)
         
         # 입력 위젯 정의 및 기본값 셋팅
         self.txt_screen_step = QLineEdit()
@@ -210,22 +205,39 @@ class MainTab(QWidget):
         self.txt_write_digit.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
         self.txt_write_digit.textChanged.connect(self.on_output_changed)
 
-        form_param.addRow(QLabel("⏱️ Screen Update Interval (SttsTime):", styleSheet="font-size: 12px;"), self.txt_screen_step)
-        form_param.addRow(QLabel("⏱️ File Write Time Step (DT_Out):", styleSheet="font-size: 12px;"), self.txt_write_step)
-        form_param.addRow(QLabel("⏱️ Start Time for Output (TStart):", styleSheet="font-size: 12px;"), self.txt_write_time)
-        form_param.addRow(QLabel("💾 Binary Output (OutFileFmt):", styleSheet="font-size: 12px;"), self.txt_write_binary)
-        form_param.addRow(QLabel("🔢 Output Precision (OutFmt):", styleSheet="font-size: 12px;"), self.txt_write_digit)
-        left_form_layout.addLayout(form_param)
+        lbl_screen = QLabel("⏱️ Screen Update Interval (SttsTime):")
+        lbl_screen.setStyleSheet("font-size: 12px;")
+        main_left_form.addRow(lbl_screen, self.txt_screen_step)
+        
+        lbl_wstep = QLabel("⏱️ File Write Time Step (DT_Out):")
+        lbl_wstep.setStyleSheet("font-size: 12px;")
+        main_left_form.addRow(lbl_wstep, self.txt_write_step)
+        
+        lbl_wtime = QLabel("⏱️ Start Time for Output (TStart):")
+        lbl_wtime.setStyleSheet("font-size: 12px;")
+        main_left_form.addRow(lbl_wtime, self.txt_write_time)
+        
+        lbl_wbinary = QLabel("💾 Binary Output (OutFileFmt):")
+        lbl_wbinary.setStyleSheet("font-size: 12px;")
+        main_left_form.addRow(lbl_wbinary, self.txt_write_binary)
+        
+        lbl_wdigit = QLabel("🔢 Output Precision (OutFmt):")
+        lbl_wdigit.setStyleSheet("font-size: 12px;")
+        main_left_form.addRow(lbl_wdigit, self.txt_write_digit)
 
-        left_layout.addLayout(left_form_layout)
+        left_layout.addLayout(main_left_form)
         left_layout.addStretch()
+        
         main_splitter.addWidget(left_widget)
-# endregion ==============================================================================================================
 
-# region : [RIGHT SIDE] 시뮬레이션 변수 입력 패널 ============================================================================
+# endregion 
+# ============================================================================
+
+# region : [RIGHT SIDE] 시뮬레이션 변수 입력 패널 
+# ============================================================================
         right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(10, 0, 0, 0)
+        main_right_layout = QVBoxLayout(right_widget)  # 💡 변수명 충돌 방지를 위해 명칭 변경
+        main_right_layout.setContentsMargins(10, 0, 0, 0)
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -233,59 +245,95 @@ class MainTab(QWidget):
         scroll_content = QWidget()
         scroll_area.setWidget(scroll_content)
         
-        right_form_layout = QVBoxLayout(scroll_content)
+        scroll_form_layout = QVBoxLayout(scroll_content)
+        scroll_form_layout.setSpacing(10)
 
-        form_param = QFormLayout()
-        form_param.setSpacing(3)
-        form_param.setContentsMargins(10, 0, 0, 0)
+        main_form_layout = QFormLayout()
+        main_form_layout.setSpacing(3)
+        main_form_layout.setContentsMargins(0, 0, 0, 0)
         
         # 입력 위젯 정의 및 기본값 셋팅
         self.txt_tmax = QLineEdit()
         self.txt_tmax.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.txt_dt = QLineEdit()
         self.txt_dt.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.txt_tmax.textChanged.connect(self.on_tmax_dt_changed)
-        self.txt_dt.textChanged.connect(self.on_tmax_dt_changed)
+        self.txt_tmax.textChanged.connect(self.on_output_changed)
+        self.txt_dt.textChanged.connect(self.on_output_changed)
 
-        right_form_layout.addWidget(QLabel("<b style='font-size:12px;'>⚙️ Simulation Control</b>"))
-        form_param.addRow(QLabel("⏱️ Total Time (TMax):", styleSheet="font-size: 12px;"), self.txt_tmax)
-        form_param.addRow(QLabel("⏱️ Time Step (DT):", styleSheet="font-size: 12px;"), self.txt_dt)
-        right_form_layout.addLayout(form_param)
+        # Simulation Control 타이틀 행 추가
+        sc_title = QLabel("<b>⚙️ Simulation Control</b>")
+        sc_title.setStyleSheet("font-size: 12px; margin-bottom: 3px;")
+        main_form_layout.addRow(sc_title)
+        
+        # 💡 styleSheet 인자 오류를 setStyleSheet 문법 혹은 HTML 방식으로 안전하게 수정
+        tmax_label = QLabel("⏱️ Total Time (TMax):")
+        tmax_label.setStyleSheet("font-size: 12px;")
+        main_form_layout.addRow(tmax_label, self.txt_tmax)
+        
+        dt_label = QLabel("⏱️ Time Step (DT):")
+        dt_label.setStyleSheet("font-size: 12px;")
+        main_form_layout.addRow(dt_label, self.txt_dt)
 
-        # 옅은 회색 구분선 추가
+        # Separator line for visual separation
         separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        separator.setStyleSheet("margin-top: 5px; margin-bottom: 5px; color: #E5E7EB;")
-        right_form_layout.addWidget(separator)
+        separator.setStyleSheet("background-color: #C1C5CB; min-height: 1px; max-height: 1px; margin: 5px 0; border: none;")
+        main_form_layout.addRow(separator)
 
-        # Initial Conditions 텍스트
-        right_form_layout.addWidget(QLabel("<b style='font-size:12px;'>⚙️ Initial Conditions</b>"))
+        # Initial Conditions 타이틀 행 추가
+        ic_title = QLabel("<b>⚙️ Initial Conditions</b>")
+        ic_title.setStyleSheet("font-size: 12px; margin-bottom: 3px;")
+        main_form_layout.addRow(ic_title)
 
-        # Initial Conditions 항목 리스트
-        ic_form_layout = QFormLayout()
-        ic_form_layout.setSpacing(3)
-        ic_form_layout.setContentsMargins(0, 0, 0, 0)
+        # Initial Conditions 항목 리스트 동적 추가
         self.ic_widgets = {}
         for key, info in self.INITIAL_CONDITIONS.items():
-            edit = QLineEdit() # 빈 위젯으로 먼저 생성
+            edit = QLineEdit()
             edit.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             edit.textChanged.connect(self.on_ic_changed)
+            
             ic_label = QLabel(f"📍 {key} ({info['desc']})")
             ic_label.setStyleSheet("font-size: 12px;")
-            ic_form_layout.addRow(ic_label, edit)
+            
+            # 💡 하나의 통합 폼 레이아웃에 순서대로 누적해 줍니다.
+            main_form_layout.addRow(ic_label, edit)
             self.ic_widgets[key] = edit
-        right_form_layout.addLayout(ic_form_layout)
-        right_form_layout.addStretch()
-        right_layout.addWidget(scroll_area)
+            
+        # 💡 스크롤 내부 레이아웃에 통합된 폼 레이아웃 장착 (중복 addLayout 코드 모두 삭제)
+        scroll_form_layout.addLayout(main_form_layout)
+        scroll_form_layout.addStretch()
+        
+        # 최상단 메인 레이아웃에 스크롤 영역 최종 조립
+        main_right_layout.addWidget(scroll_area)
         main_splitter.addWidget(right_widget)
         
         main_layout.addWidget(main_splitter)
         main_splitter.setSizes([400, 500])
 
-        # self.refresh_values_from_file() # on_tab_enter에서 호출되므로 여기서 제거
-# endregion ============================================================================================================
+# endregion 
+# ============================================================================================================
 
+    def open_file_in_editor(self, event):
+        """ lbl_file_path를 더블 클릭했을 때 Notepad++로 파일을 엽니다. """
+        file_path = self.lbl_file_path.text()
+        if not file_path or not os.path.exists(file_path):
+            QMessageBox.warning(self, "파일 오류", "유효한 파일 경로가 아닙니다.")
+            return
+
+        npp_path = r"C:\Program Files\Notepad++\notepad++.exe"
+        try:
+            if os.path.exists(npp_path):
+                subprocess.Popen([npp_path, file_path])
+                print(f"🚀 Notepad++ 오픈 완수: {os.path.basename(file_path)}")
+            else:
+                # Notepad++가 없으면 기본 메모장으로 엽니다.
+                subprocess.Popen(["notepad.exe", file_path])
+                print(f"📝 Notepad++ 미설치로 기본 메모장 우회 구동: {os.path.basename(file_path)}")
+        except Exception as e:
+            QMessageBox.critical(self, "실행 오류", f"파일을 여는 중 오류가 발생했습니다:\n{str(e)}")
+
+    def on_tab_enter(self):
+        """ 탭에 들어올 때마다 UI를 새로고침합니다. """
+        self.refresh_ui()
 
     def on_tab_leave(self):
         """ Main 탭을 떠날 때 변경사항 저장 여부 확인 """
@@ -301,7 +349,7 @@ class MainTab(QWidget):
                     QMessageBox.Yes
                 )
                 if reply == QMessageBox.Yes:
-                    self.apply_changed_parameters()
+                    self.apply_values_to_file()
                 else:
                     self.discard_changes()
 
@@ -384,7 +432,7 @@ class MainTab(QWidget):
             pass
         return result
     
-    def refresh_values_from_file(self):
+    def refresh_ui(self):
         """ 콤보박스 항목을 OpenFastIO.current_config 기준으로 갱신 """
         # Block signals for all module widgets
         widgets_to_block = list(self.module_widgets.values()) + list(self.ic_widgets.values()) + \
@@ -455,26 +503,29 @@ class MainTab(QWidget):
 
     def on_tab_enter(self):
         """ 탭에 들어올 때마다 UI를 새로고침합니다. """
-        self.refresh_values_from_file()
+        self.refresh_ui()
 
-    def mark_asdirty(self, *args): # _on_value_changed에서 이름 변경
-        self.dirty = True
+    def mark_asdirty(self, *args): 
+        self._dirty = True
         self.update_apply_button(active=True)
 
-    def on_tmax_dt_changed(self, text):
-        self.dirty = True
-        self.update_apply_button(active=True)
+        # 💡 [수정] 변경된 콤보박스 값을 OpenFastIO.current_config에 즉시 반영
+        sender = self.sender()
+        if isinstance(sender, QComboBox):
+            for key, widget in self.module_widgets.items():
+                if widget == sender:
+                    OpenFastIO.current_config[key]["current"] = sender.currentText()
 
     def on_output_changed(self, text):
-        self.dirty = True
+        self._dirty = True
         self.update_apply_button(active=True)
 
     def on_ic_changed(self, text):
-        self.dirty = True
+        self._dirty = True
         self.update_apply_button(active=True)
 
     def on_apply_clicked(self):
-        if self.isdirty(): # isdirty에서 이름 변경
+        if self.isdirty(): 
             result = self.apply_values_to_file()
             if result:
                 self.update_apply_button(active=False)
@@ -505,8 +556,8 @@ class MainTab(QWidget):
         self.btn_apply.setStyleSheet(style)
         self.btn_discard.setStyleSheet(style)
 
-    def isdirty(self): # isdirty에서 이름 변경
-        return self.dirty
+    def isdirty(self): 
+        return self._dirty
 
     def apply_values_to_file(self):
         """ 변경된 스위치 값을 메인 .fst 파일에 저장하고, Initial Conditions는 EDFile에 저장 """
@@ -542,8 +593,8 @@ class MainTab(QWidget):
                 ed_result = OpenFastIO.save_module_data(ed_path, ic_data)
 
         if fst_result and ed_result:
-            self.dirty = False
-            self.refresh_values_from_file() # 저장 후 원본 값들을 다시 로드하여 동기화
+            self._dirty = False
+            self.refresh_ui() # 저장 후 원본 값들을 다시 로드하여 동기화
         return fst_result and ed_result
 
     def discard_changes(self): 
