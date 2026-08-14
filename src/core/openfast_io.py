@@ -13,6 +13,7 @@ class OpenFastIO:
         "BldFile(1)":   {"default": "blade_ElastoDyn.dat", "current": ""},
         "BldFile(2)":   {"default": "blade_ElastoDyn.dat", "current": ""},
         "BldFile(3)":   {"default": "blade_ElastoDyn.dat", "current": ""},
+        "TwrFile":      {"default": "ElastoDyn_Tower.dat", "current": ""},
 
         "BDBldFile(1)": {"default": "BeamDyn.dat", "current": ""},
         "BDBldFile(2)": {"default": "BeamDyn.dat", "current": ""},
@@ -46,10 +47,6 @@ class OpenFastIO:
         "IceFile":      {"default": "Ice.dat", "current": ""},
         "CompSoil":     {"default": "0", "current": ""},
         "SoilFile":     {"default": "Soil.dat", "current": ""},
-
-        "TMax":         {"default": "600.0", "current": ""},
-        "DT":           {"default": "0.0125", "current": ""},
-        "WakeMod":      {"default": "1", "current": ""}
     }
 
     _MODULE_MAP = [
@@ -137,7 +134,7 @@ class OpenFastIO:
         return config_dict
 
     @classmethod
-    def _int_val(cls, key):
+    def _internal_val(cls, key):
         """ 현재/기본값을 정수로 안전하게 변환 (비활성=0) """
         val = cls.current_config[key].get("current") or cls.current_config[key]["default"]
         try:
@@ -147,22 +144,22 @@ class OpenFastIO:
 
     @classmethod
     def _resolve_path(cls, file_key, base_path):
-        """ file_key 의 파일명을 base_path 기준 절대경로로 해석 """
+        """ file_key 파일명을 base_path 기준 절대경로로 해석 """
         name = cls.current_config[file_key].get("current") or cls.current_config[file_key]["default"]
         return cls.get_absolute_path(base_path, name)
 
     @classmethod
-    def update_config_from_fst(cls, root_path):
+    def update_config_from_fst(cls, fst_path):
         """ .fst를 시작으로 연쇄 파싱을 수행하여 중앙 config만 완벽히 업데이트 """
 
         cls.reset_config_to_defaults()
-        cls.current_config["MainFST"]["current"] = root_path
-        cls.current_config = cls.read_file(root_path, cls.current_config)
+        cls.current_config["MainFST"]["current"] = fst_path
+        cls.current_config = cls.read_file(fst_path, cls.current_config)
 
         # ElastoDyn
-        comp_elast = cls._int_val("CompElast")
+        comp_elast = cls._internal_val("CompElast")
         if comp_elast in (1, 2):
-            ed_path = cls._resolve_path("EDFile", root_path)
+            ed_path = cls._resolve_path("EDFile", fst_path)
             cls.current_config = cls.read_file(ed_path, cls.current_config)
 
         # BeamDyn (+ 하위 BldFile)
@@ -174,22 +171,25 @@ class OpenFastIO:
                 cls.current_config = cls.read_file(bld_path, cls.current_config)
 
         # AeroDyn
-        if cls._int_val("CompAero") > 0:
-            ae_path = cls._resolve_path("AeroFile", root_path)
+        if cls._internal_val("CompAero") > 0:
+            ae_path = cls._resolve_path("AeroFile", fst_path)
             cls.current_config = cls.read_file(ae_path, cls.current_config)
 
         # ServoDyn (+ DLL)
-        if cls._int_val("CompServo") > 0:
-            sv_path = cls._resolve_path("ServoFile", root_path)
+        if cls._internal_val("CompServo") > 0:
+            sv_path = cls._resolve_path("ServoFile", fst_path)
             cls.current_config = cls.read_file(sv_path, cls.current_config)
             dll_path = cls._resolve_path("DLL_FileName", sv_path)
             cls.current_config = cls.read_file(dll_path, cls.current_config)
 
         # 나머지 독립 모듈 (데이터 기반 루프)
         for comp_key, file_key, _ in cls._MODULE_MAP:
-            if cls._int_val(comp_key) > 0:
-                mod_path = cls._resolve_path(file_key, root_path)
+            if cls._internal_val(comp_key) > 0:
+                mod_path = cls._resolve_path(file_key, fst_path)
                 cls.current_config = cls.read_file(mod_path, cls.current_config)
+
+
+        print(f" TwrFile = {cls.current_config['TwrFile']['current']}")
 
         return cls.current_config
 
@@ -249,9 +249,15 @@ class OpenFastIO:
                             old_value_str = match.group(1)
                             leading_whitespace = line[:len(line) - len(line.lstrip())]
                             # 새 값으로 교체하고 줄의 나머지 부분 유지
-                            # 값을 10자리로 맞추고, 나머지 부분은 그대로 유지합니다.
                             remainder = line.split(key, 1)[1]
-                            new_lines[i] = f"{str(new_val):<12}{key}{remainder}"
+
+                            # 값과 키 사이에 항상 공백이 있도록 포맷팅을 수정합니다.
+                            # 값이 11자보다 짧으면 12칸을 채우고, 길면 값 뒤에 공백 하나를 추가합니다.
+                            if len(str(new_val)) < 12:
+                                new_lines[i] = f"{str(new_val):<12}{key}{remainder}"
+                            else:
+                                new_lines[i] = f"{str(new_val)} {key}{remainder}"
+
                             break # 키를 찾아서 업데이트했으면 다음 키로 넘어감
 
             with open(file_path, 'w', encoding='utf-8') as f:

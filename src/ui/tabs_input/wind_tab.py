@@ -22,9 +22,11 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
                                QTreeView, QAbstractItemView)
 
 from src.core.openfast_io import OpenFastIO  # 코어 엔진 임포트
+from src.ui.tabs_input.turbsim_dialog import TurbSimDialog # TurbSim 생성기 다이얼로그 임포트
 
 class WindTab(QWidget):
     WIND_KEYS = {
+        "Description":  {"value": ""}, # InflowWind 파일 설명을 위한 필드 추가
         "Echo":         {"value": "False"},
         "WindType":     {"value": "1"},
         "HWindSpeed":   {"value": "0.0"},
@@ -108,7 +110,7 @@ class WindTab(QWidget):
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)    
         left_layout.setContentsMargins(10, 10, 10, 0)
-        left_layout.setSpacing(3)
+        left_layout.setSpacing(5)
 
         left_layout.addWidget(QLabel("<b style='font-size:13px;'>⚙️ General settings</b>"))
 
@@ -159,19 +161,14 @@ class WindTab(QWidget):
         self.combo_wind_type.currentIndexChanged.connect(self.on_wind_type_changed)
         module_form_layout.addRow("📍 WindType :", self.combo_wind_type)
 
-        # 출력 포인트 설정
         self.txt_nwindvel = QLineEdit("1")
-        self.txt_nwindvel.setFixedWidth(80)
         self.txt_nwindvel.textChanged.connect(self.mark_asdirty)
         module_form_layout.addRow("📍 NWindVel (Points) :", self.txt_nwindvel)
         
-        # 좌표 리스트 (단순화를 위해 콤마 분리 입력창으로 예시)
         self.txt_vzi_list = QLineEdit("87")
         self.txt_vzi_list.textChanged.connect(self.mark_asdirty)
         module_form_layout.addRow("📍 WindVziList (Z m) :", self.txt_vzi_list)
-        left_layout.addLayout(module_form_layout)
-
-        left_layout.addLayout(module_form_layout)
+        left_layout.addLayout(module_form_layout) # 모든 위젯을 추가한 후, 레이아웃을 한 번만 추가합니다.
     
         # Separator line for visual separation
         separator = QFrame()
@@ -358,6 +355,7 @@ class WindTab(QWidget):
 
 
 
+
     def on_output_tree_entered(self, index):
         """ 마우스가 Available 트리 아이템 위에 올라갔을 때 상태바에 설명 표시 """
         if not index.isValid():
@@ -415,67 +413,6 @@ class WindTab(QWidget):
 
 
 
-    # 페이지 생성 서브 함수들 (예시용 일부 구현) 
-    # --------------------------------------------------------------------------------------------------------
-    def create_steady_page(self):
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addWidget(QLabel("<b>🍃 Steady Wind Parameters (WindType = 1)</b>"))
-        self.txt_hwindspeed = QLineEdit()
-        self.txt_hwindspeed.textChanged.connect(self.mark_asdirty)
-        self.txt_refht = QLineEdit()
-        self.txt_refht.textChanged.connect(self.mark_asdirty)
-        self.txt_plexp = QLineEdit()
-        self.txt_plexp.textChanged.connect(self.mark_asdirty)
-        layout.addRow("HWindSpeed (m/s) :", self.txt_hwindspeed)
-        layout.addRow("RefHt (m) :", self.txt_refht)
-        layout.addRow("PLExp (-) :", self.txt_plexp)
-        return page
-
-    def create_uniform_page(self):
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addWidget(QLabel("<b>💨 Uniform Wind Parameters (WindType = 2)</b>"))
-        
-        # 파일 브라우저 스타일 예시
-        file_layout = QHBoxLayout()
-        self.txt_filename_uni = QLineEdit("unused.hh")
-        btn_browse = QPushButton("📂")
-        btn_browse.setFixedWidth(35)
-        file_layout.addWidget(self.txt_filename_uni)
-        file_layout.addWidget(btn_browse)
-        
-        layout.addRow("FileName_Uni :", file_layout)
-        layout.addRow("RefHt_Uni (m) :", QLineEdit("90.0"))
-        layout.addRow("RefLength (m) :", QLineEdit("125.88"))
-        return page
-
-    def create_bts_page(self):
-        page = QWidget()
-        layout = QFormLayout(page)
-        layout.addWidget(QLabel("<b>🌪️ TurbSim Full-Field Parameters (WindType = 3)</b>"))
-        
-        file_layout = QHBoxLayout()
-        self.txt_filename_bts = QLineEdit()
-        self.txt_filename_bts.textChanged.connect(self.mark_asdirty)
-        txt_file = self.txt_filename_bts
-        btn_browse = QPushButton("📂")
-        btn_browse.setFixedWidth(35)
-        file_layout.addWidget(txt_file)
-        file_layout.addWidget(btn_browse)
-        
-        layout.addRow("FileName_BTS :", file_layout)
-        return page
-
-    def on_wind_type_changed(self, index):
-        # 콤보박스 인덱스에 따라 stackedWidget 페이지를 전환 (1, 2, 3번 위주 맵핑 예시)
-        if index in [0, 1, 2]:
-            self.stacked_panel.setCurrentIndex(index)
-        else:
-            # 아직 구현 안 된 4, 5, 7번 선택 시 빈 페이지나 경고 뷰 처리
-            self.stacked_panel.setCurrentIndex(0) 
-    # --------------------------------------------------------------------------------------------------------
-    
     def load_wind_data(self):
         main_fst = OpenFastIO.current_config.get("MainFST", {}).get("current", "").strip()
         wind_file_name = OpenFastIO.current_config.get("InflowFile", {}).get("current", "")
@@ -489,14 +426,17 @@ class WindTab(QWidget):
         result = copy.deepcopy(self.WIND_KEYS)
         try:
             with open(wind_file_path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
+                lines = f.readlines()
+                if len(lines) > 1:
+                    # InflowWind 파일의 두 번째 줄을 설명으로 간주하여 읽어옵니다.
+                    result["Description"]["value"] = lines[1].strip()
+
+                for line in lines: # 모든 라인을 순회하며 다른 키들을 찾습니다.
                     parts = line.strip().split()
-                    if len(parts) < 2:
-                        continue
-                    
-                    key = parts[1]
-                    if key in result:
-                        result[key]["value"] = parts[0].strip('"\'')
+                    if len(parts) >= 2:
+                        key = parts[1]
+                        if key in result and key != "Description": # Description 키는 이미 처리했으므로 건너뜁니다.
+                            result[key]["value"] = parts[0].strip('"\'')
         except Exception as e:
             print(f"Error loading wind data: {e}")
         return result
@@ -507,23 +447,26 @@ class WindTab(QWidget):
             # CompInflow가 0이면 UI 업데이트를 건너뜁니다.
             # init_ui에서 이미 메시지를 표시하도록 처리했습니다.
             return
-
+        
         self.wind_data = self.load_wind_data()
 
         widgets_to_block = [
             self.chk_echo, self.chk_sumprint, self.combo_wind_type, self.txt_nwindvel,
-            self.txt_vzi_list, self.chk_sumprint, self.txt_hwindspeed, self.txt_refht,
-            self.txt_plexp, self.txt_filename_uni, self.txt_filename_bts
+            self.txt_vzi_list, self.txt_hwindspeed, self.txt_refht,
+            self.txt_plexp, self.txt_filename_uni, self.txt_filename_bts,
+            self.txt_refht_uni, self.txt_reflength # 누락된 위젯 추가
         ]
         for widget in widgets_to_block:
             widget.blockSignals(True)
 
         # General
+        self.txt_description.setText(self.wind_data["Description"]["value"]) # Description 필드 값 설정
         echo_val = str(self.wind_data["Echo"]["value"]).lower() == "true"
-        self.chk_echo.setChecked(echo_val)
-        sumprint_val = str(self.wind_data["TimeInterp"]["value"]).lower() == "true"
-        self.chk_sumprint.setChecked(sumprint_val)
+        self.chk_echo.setChecked(echo_val)        
+        sumprint_val = str(self.wind_data["SumPrint"]["value"]).lower() == "true"
+        self.chk_sumprint.setChecked(sumprint_val) 
         wind_type = int(self.wind_data["WindType"]["value"])
+        print(f"[DEBUG]    - 파일에서 읽어온 WindType: {wind_type}")
         self.combo_wind_type.setCurrentIndex(wind_type - 1)
         self.txt_nwindvel.setText(self.wind_data["NWindVel"]["value"])
         self.txt_vzi_list.setText(self.wind_data["WindVziList"]["value"])
@@ -533,13 +476,25 @@ class WindTab(QWidget):
         # Page specific
         self.txt_hwindspeed.setText(self.wind_data["HWindSpeed"]["value"])
         self.txt_refht.setText(self.wind_data["RefHt"]["value"])
+        self.txt_refht_uni.setText(self.wind_data["RefHt_Uni"]["value"]) # Uniform Wind 페이지 값 설정 추가
+        self.txt_reflength.setText(self.wind_data["RefLength"]["value"]) # Uniform Wind 페이지 값 설정 추가
         self.txt_plexp.setText(self.wind_data["PLExp"]["value"])
-        self.txt_filename_uni.setText(self.wind_data["FileName_Uni"]["value"])
-        self.txt_filename_bts.setText(self.wind_data["FileName_BTS"]["value"])
+
+        # InflowWind 파일의 절대 경로를 기준으로 다른 파일들의 경로를 계산합니다.
+        main_fst_path = OpenFastIO.current_config.get("MainFST", {}).get("current", "")
+        inflow_file_name = OpenFastIO.current_config.get("InflowFile", {}).get("current", "")
+        inflow_file_path = OpenFastIO.get_absolute_path(main_fst_path, inflow_file_name)
+
+        self.txt_filename_uni.setText(OpenFastIO.get_absolute_path(inflow_file_path, self.wind_data["FileName_Uni"]["value"]))
+        self.txt_filename_bts.setText(OpenFastIO.get_absolute_path(inflow_file_path, self.wind_data["FileName_BTS"]["value"]))
+        print(f"FileName_BTS = {self.wind_data["FileName_BTS"]["value"]}")
 
         # Unblock signals
         for widget in widgets_to_block:
             widget.blockSignals(False)
+            
+        # 💡 [수정] UI 값 설정이 모두 끝난 후, 현재 WindType에 맞는 페이지를 명시적으로 표시
+        self.on_wind_type_changed(self.combo_wind_type.currentIndex())
 
         self._dirty = False
         self.update_apply_button(active=False)
@@ -579,11 +534,20 @@ class WindTab(QWidget):
         if not main_fst or not wind_file_name:
             QMessageBox.warning(self, "파일 오류", "InflowWind 파일 경로를 찾을 수 없습니다.")
             return False
-
+        
         wind_file_path = OpenFastIO.get_absolute_path(main_fst, wind_file_name)
+        wind_file_dir = os.path.dirname(wind_file_path)
+
+        # UI의 절대 경로를 InflowWind 파일 기준의 상대 경로로 변환하여 저장
+        filename_bts_relative = os.path.relpath(self.txt_filename_bts.text(), wind_file_dir).replace('\\', '/')
+        filename_uni_relative = os.path.relpath(self.txt_filename_uni.text(), wind_file_dir).replace('\\', '/')
 
         updated_data = {
             "Echo": str(self.chk_echo.isChecked()).lower(),
+            "RefHt_Uni": self.txt_refht_uni.text(),
+            "RefLength": self.txt_reflength.text(),
+            "FileName_Uni": f'"{filename_uni_relative}"',
+            "FileName_BTS": f'"{filename_bts_relative}"',
             "TimeInterp": str(self.chk_sumprint.isChecked()).lower(),
             "WindType": str(self.combo_wind_type.currentIndex() + 1),
             "NWindVel": self.txt_nwindvel.text(),
@@ -592,11 +556,9 @@ class WindTab(QWidget):
             "HWindSpeed": self.txt_hwindspeed.text(),
             "RefHt": self.txt_refht.text(),
             "PLExp": self.txt_plexp.text(),
-            "FileName_BTS": self.txt_filename_bts.text(),
-            "FileName_Uni": self.txt_filename_uni.text(),
         }
 
-        result = OpenFastIO.save_module_data(wind_file_path, updated_data)
+        result = OpenFastIO.save_module_data(wind_file_path, updated_data, description=self.txt_description.text()) # Description 값 전달
         if result:
             self._dirty = False
             self.refresh_ui_from_file()
@@ -613,6 +575,7 @@ class WindTab(QWidget):
             if str(orig_val).lower() != str(current_val).lower():
                 parts.append(f"- {key}: {orig_val} -> {current_val}")
 
+        check_and_append("Description", self.txt_description.text(), "txt_description")
         check_and_append("Echo", self.chk_echo.isChecked(), "chk_echo")
         check_and_append("TimeInterp", self.chk_sumprint.isChecked(), "chk_sumprint")
         check_and_append("WindType", self.combo_wind_type.currentIndex() + 1, "combo_wind_type")
@@ -623,6 +586,143 @@ class WindTab(QWidget):
         check_and_append("RefHt", self.txt_refht.text(), "txt_refht")
         check_and_append("PLExp", self.txt_plexp.text(), "txt_plexp")
         check_and_append("FileName_BTS", self.txt_filename_bts.text(), "txt_filename_bts")
+        check_and_append("RefHt_Uni", self.txt_refht_uni.text(), "txt_refht_uni")
+        check_and_append("RefLength", self.txt_reflength.text(), "txt_reflength")
         check_and_append("FileName_Uni", self.txt_filename_uni.text(), "txt_filename_uni")
 
         return "\n".join(parts) if parts else "변경된 내용이 없습니다."
+
+
+
+
+
+    # 페이지 생성 서브 함수들 (일부 구현) 
+    # --------------------------------------------------------------------------------------------------------
+    def on_wind_type_changed(self, index):
+        print(f"[DEBUG] 3. on_wind_type_changed() 호출됨 (index: {index})")
+        # 콤보박스 인덱스에 따라 stackedWidget 페이지를 전환 (1, 2, 3번 위주 맵핑 예시)
+        if index in [0, 1, 2]:
+            self.stacked_panel.setCurrentIndex(index)
+        else:
+            # 아직 구현 안 된 4, 5, 7번 선택 시 빈 페이지나 경고 뷰 처리
+            self.stacked_panel.setCurrentIndex(0) 
+
+    
+
+    def create_steady_page(self):
+        page = QWidget()
+        layout = QFormLayout(page)
+        layout.addWidget(QLabel("<b>🍃 Steady Wind Parameters (WindType = 1)</b>"))
+        self.txt_hwindspeed = QLineEdit()
+        self.txt_hwindspeed.textChanged.connect(self.mark_asdirty)
+        self.txt_refht = QLineEdit()
+        self.txt_refht.textChanged.connect(self.mark_asdirty)
+        self.txt_plexp = QLineEdit()
+        self.txt_plexp.textChanged.connect(self.mark_asdirty)
+        layout.addRow("HWindSpeed (m/s) :", self.txt_hwindspeed)
+        layout.addRow("RefHt (m) :", self.txt_refht)
+        layout.addRow("PLExp (-) :", self.txt_plexp)
+        return page
+
+    def create_uniform_page(self):
+        page = QWidget()
+        layout = QFormLayout(page)
+        title_label = QLabel("<b>💨 Uniform Wind Parameters (WindType = 2)</b>")
+        title_label.setAlignment(Qt.AlignLeft)
+        layout.addWidget(title_label)
+        
+        # 파일 브라우저 스타일 예시
+        file_layout = QHBoxLayout()
+        self.txt_filename_uni = QLineEdit()
+        self.txt_filename_uni.textChanged.connect(self.mark_asdirty)
+        btn_browse = QPushButton("📂")
+        btn_browse.setFixedWidth(35)
+        btn_browse.clicked.connect(self.browse_file_for_uniform_wind)
+        file_layout.addWidget(self.txt_filename_uni)
+        file_layout.addWidget(btn_browse)
+        
+        layout.addRow("FileName_Uni :", file_layout)
+
+        self.txt_refht_uni = QLineEdit()
+        self.txt_refht_uni.textChanged.connect(self.mark_asdirty)
+        layout.addRow("RefHt_Uni (m) :", self.txt_refht_uni)
+
+        self.txt_reflength = QLineEdit()
+        self.txt_reflength.textChanged.connect(self.mark_asdirty)
+        layout.addRow("RefLength (m) :", self.txt_reflength)
+        return page
+
+    def browse_file_for_uniform_wind(self):
+        """ Uniform Wind 파일 선택 다이얼로그를 엽니다. """
+        current_path = self.txt_filename_uni.text()
+        start_dir = os.path.dirname(current_path) if os.path.exists(current_path) else ""
+        
+        file_path, _ = QFileDialog.getOpenFileName(self, "Uniform Wind 파일 선택", start_dir, "Wind Files (*.wnd);;All Files (*)")
+        if file_path:
+            self.txt_filename_uni.setText(file_path)
+            self.mark_asdirty()
+
+    def browse_file_for_bts_wind(self):
+        """ TurbSim Full-Field 파일 선택 다이얼로그를 엽니다. """
+        current_path = self.txt_filename_bts.text()
+        start_dir = os.path.dirname(current_path) if os.path.exists(current_path) else ""
+
+        file_path, _ = QFileDialog.getOpenFileName(self, "TurbSim Full-Field 파일 선택", start_dir, "TurbSim Files (*.bts);;All Files (*)")
+        if file_path:
+            self.txt_filename_bts.setText(file_path)
+            self.mark_asdirty()
+
+    def create_bts_page(self):
+        page = QWidget()
+        layout = QFormLayout(page)
+        layout.setSpacing(3)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        title_label = QLabel("<b>⚙️ TurbSim Full-Field Parameters (WindType = 3)</b>")
+        title_label.setAlignment(Qt.AlignLeft)
+        layout.addRow(title_label)
+
+        file_layout = QHBoxLayout()
+        self.txt_filename_bts = QLineEdit()
+        self.txt_filename_bts.setStyleSheet("background-color: white;")
+        self.txt_filename_bts.textChanged.connect(self.mark_asdirty)
+        btn_browse = QPushButton("📂")
+        btn_browse.clicked.connect(self.browse_file_for_bts_wind)
+        btn_browse.setFixedWidth(35)
+        file_layout.addWidget(self.txt_filename_bts)
+        file_layout.addWidget(btn_browse)
+        layout.addRow("📍 FileName_BTS :", file_layout)
+
+        # Separator line for visual separation
+        separator = QFrame()
+        separator.setStyleSheet("background-color: #C1C5CB; min-height: 1px; max-height: 1px; margin: 5px 0; border: none;")
+        layout.addRow(separator)
+
+        title_label = QLabel("<b>⚙️ TurbSim btn file generation </b>")
+        title_label.setAlignment(Qt.AlignLeft)
+        layout.addRow(title_label)
+
+        turbsim_layout = QHBoxLayout()
+        btn_turbsim = QPushButton(" Base format of .bts is FileName_BTS.inp ")
+        btn_turbsim.setMinimumHeight(35) 
+        btn_turbsim.clicked.connect(self.open_turbsim_generator) # TurbSim 생성기 창 열기 기능 연결
+        turbsim_layout.addWidget(btn_turbsim)
+        layout.addRow("📍 Wind File (.bts) Generator :", turbsim_layout)
+                     
+        return page
+
+    def open_turbsim_generator(self):
+        """ TurbSim .bts 파일 생성기 다이얼로그를 엽니다. """
+        
+        main_fst = OpenFastIO.current_config.get("MainFST", {}).get("current", "")
+        inflow_file_name = OpenFastIO.current_config.get("InflowFile", {}).get("current", "")
+        if not main_fst or not inflow_file_name:
+            QMessageBox.warning(self, "파일 오류", "메인 FST 파일 또는 InflowWind 파일 경로를 찾을 수 없습니다.")
+            return
+        
+        inflow_file_path = OpenFastIO.get_absolute_path(main_fst, inflow_file_name)
+        # TurbSimDialog의 정적 메서드를 호출하여 창을 띄웁니다.
+        TurbSimDialog.show_window(self, self.txt_filename_bts, inflow_file_path)
+
+
+    # --------------------------------------------------------------------------------------------------------

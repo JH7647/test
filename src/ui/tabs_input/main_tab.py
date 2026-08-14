@@ -103,10 +103,17 @@ class MainTab(QWidget):
 
 # region : [LEFT SIDE] Description, Toggles, Module Switches 
 # ====================================================================================================
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(10, 10, 10, 0)
-        left_layout.setSpacing(3)
+        # 💡 스크롤 가능한 영역으로 변경
+        left_scroll_area = QScrollArea()
+        left_scroll_area.setWidgetResizable(True)
+        left_scroll_area.setStyleSheet("QScrollArea { border: none; }")
+        
+        left_widget_container = QWidget()
+        left_scroll_area.setWidget(left_widget_container)
+
+        left_layout = QVBoxLayout(left_widget_container)
+        left_layout.setContentsMargins(10, 10, 10, 10)
+        left_layout.setSpacing(5)
 
         main_left_form = QFormLayout()
         main_left_form.setSpacing(3)
@@ -228,7 +235,7 @@ class MainTab(QWidget):
         left_layout.addLayout(main_left_form)
         left_layout.addStretch()
         
-        main_splitter.addWidget(left_widget)
+        main_splitter.addWidget(left_scroll_area)
 
 # endregion 
 # ============================================================================
@@ -306,8 +313,8 @@ class MainTab(QWidget):
         main_right_layout.addWidget(scroll_area)
         main_splitter.addWidget(right_widget)
         
+        main_splitter.setSizes([550, 450])
         main_layout.addWidget(main_splitter)
-        main_splitter.setSizes([400, 500])
 
 # endregion 
 # ============================================================================================================
