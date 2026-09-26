@@ -112,8 +112,8 @@ class FilesTab(QWidget):
 
         # --- 파일 타입 필터 체크박스 (한 줄에 배치) ---
         filter_layout = QHBoxLayout()
-        filter_layout.setContentsMargins(0, 0, 0, 0)
-        filter_layout.setSpacing(10)
+        # filter_layout.setContentsMargins(0, 0, 0, 0)
+        # filter_layout.setSpacing(2)
 
         self.chk_fst = QCheckBox("📜  ")
         self.chk_out = QCheckBox("📊  ")
@@ -342,6 +342,7 @@ class FilesTab(QWidget):
         # 마우스 물리 피지컬 이벤트 격리 바인딩
         self.model_tree.mousePressEvent = self.model_tree_press_event
         self.model_tree.mouseMoveEvent = self.model_tree_move_event
+        self.model_tree.clicked.connect(self.model_tree_clicked)
         self.model_tree.doubleClicked.connect(self.model_tree_item_double_clicked)
         self.model_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.model_tree.customContextMenuRequested.connect(self.model_tree_item_right_clicked)
@@ -540,14 +541,14 @@ class FilesTab(QWidget):
                     if loop_path and any(loop_path.lower() == df.lower() for df in self.displayed_files):
                         loop_item.setBackground(QBrush(QColor("#D1D5DB")))
                         loop_item.setForeground(QBrush(QColor("#374151")))
-                        font = QFont()
+                        font = item.font()
                         font.setBold(True)
                         loop_item.setFont(font)
                     # 대상이 아닌 과거의 파일인 경우 -> 깨끗하게 원상 복구!
                     else:
                         loop_item.setBackground(QBrush(Qt.GlobalColor.transparent))
                         loop_item.setForeground(QBrush(Qt.GlobalColor.black))
-                        font = QFont()
+                        font = item.font()
                         font.setBold(False)
                         loop_item.setFont(font)
 
@@ -632,7 +633,7 @@ class FilesTab(QWidget):
                 # 🎨 마우스 클릭 스타일시트와 완전히 일치하는 연회색/진한회색 주입
                 item.setBackground(QBrush(QColor("#D1D5DB")))      
                 item.setForeground(QBrush(QColor("#374151")))      
-                font = QFont()
+                font = item.font()
                 font.setBold(True)
                 item.setFont(font)
 
@@ -804,7 +805,7 @@ class FilesTab(QWidget):
             file_root_item.setEditable(False)
             file_root_item.setData(file_path, Qt.UserRole) # 전체 경로 저장
             
-            font = QFont()
+            font = file_root_item.font()
             font.setBold(True)
             file_root_item.setFont(font)
 
@@ -923,6 +924,9 @@ class FilesTab(QWidget):
                 if root_index.isValid():
                     self.model_tree.setExpanded(root_index, True)             
 
+            # 선택된 파일들 하이라이트 재적용
+            self._update_model_tree_highlight()
+
     def model_tree_press_event(self, event):
         """ 마우스 클릭 시 클릭한 위치와 항목을 기억하는 함수 """
         if event.button() == Qt.LeftButton:
@@ -959,12 +963,12 @@ class FilesTab(QWidget):
                 mime_data = QMimeData()
                 mime_data.setUrls([QUrl.fromLocalFile(file_path)])
                 
-                drag = QDrag(self.model_tree_view)
+                drag = QDrag(self.model_tree)
                 drag.setMimeData(mime_data)
 
                 from PySide6.QtWidgets import QStyle
                 # 시스템 표준 파일 아이콘을 큼직한 크기(48x48)로 가져와 마우스에 붙임
-                pixmap = self.model_tree_view.style().standardIcon(QStyle.SP_FileIcon).pixmap(48, 48)
+                pixmap = self.model_tree.style().standardIcon(QStyle.SP_FileIcon).pixmap(48, 48)
                 drag.setPixmap(pixmap)                
 
                 # 드래그 시 마우스 커서 모양을 복사(Copy) 형태로 지정하여 수행
@@ -996,6 +1000,112 @@ class FilesTab(QWidget):
                 subprocess.Popen(["notepad.exe", file_path])
         else:
             QMessageBox.warning(self, "Error", "Files is not found & Please check whether the file exist.")
+
+    def model_tree_clicked(self, index):
+        """ 우측 model_tree에서 마우스 클릭 시 파일 선택 추적 (Ctrl+클릭으로 다중 선택 지원) """
+        if not index.isValid():
+            return
+
+        item = self.model_tree_model.itemFromIndex(index)
+        if not item:
+            return
+
+        full_text = item.text()
+        
+        # "📁 모듈명    : C:/path/file.dat" 형태에서 실제 파일 절대 경로만 추출
+        if " : " in full_text:
+            clicked_file_path = full_text.split(" : ", 1)[1].strip()
+        elif "\t:" in full_text:
+            clicked_file_path = full_text.split("\t:")[1].strip()
+        elif ":" in full_text:
+            clicked_file_path = full_text.split(":", 1)[1].strip()
+        else:
+            return
+
+        if not clicked_file_path or not os.path.exists(clicked_file_path):
+            return
+
+        # 궤적 추적용 파일 리스트가 클래스에 없다면 안전하게 생성
+        if not hasattr(self, 'model_tree_displayed_files'):
+            self.model_tree_displayed_files = []
+
+        # Ctrl 키를 누른 상태에서 클릭한 경우
+        modifiers = QApplication.keyboardModifiers()
+        if bool(modifiers & Qt.ControlModifier):
+            # 조건 : 처음에 아무것도 표시되지 않은 상태였다면 -> 그냥 클릭한 파일만 표시
+            if not self.model_tree_displayed_files:
+                self.model_tree_displayed_files = [clicked_file_path]
+                print(f"[ACTION] [ModelTree Ctrl + Click] 처음 상태 -> {clicked_file_path} 단독 추가")
+            
+            # 조건 : 이미 2개의 파일이 표시되어 있는 상태라면 -> 두번째 파일을 새 파일로 교체
+            elif len(self.model_tree_displayed_files) >= 2:
+                print(f"[ACTION] [ModelTree Ctrl + Click] 2개 포화 상태 -> 두번째 파일({self.model_tree_displayed_files[1]})을 {clicked_file_path}로 교체")
+                self.model_tree_displayed_files[1] = clicked_file_path
+            
+            # 그 외 (이미 1개만 표시되어 있던 상태) -> 뒤에 추가하여 2개로 만듦
+            else:
+                if clicked_file_path not in self.model_tree_displayed_files:
+                    self.model_tree_displayed_files.append(clicked_file_path)
+                    print(f"[ACTION] [ModelTree Ctrl + Click] 두번째 파일 추가 -> {clicked_file_path}")
+        
+        # 그냥 클릭한 경우 (Ctrl 없이 일반 클릭)
+        else:
+            print(f"[ACTION] [ModelTree Single Click] 기존 파일 초기화 후 단독 표시 -> {clicked_file_path}")
+            self.model_tree_displayed_files = [clicked_file_path]
+
+        # UI 하이라이트 업데이트
+        self._update_model_tree_highlight()
+
+    def _update_model_tree_highlight(self):
+        """ model_tree 표시 대상 파일들 하이라이트 업데이트 """
+        if not hasattr(self, 'model_tree_displayed_files'):
+            return
+
+        for row in range(self.model_tree_model.rowCount()):
+            root_item = self.model_tree_model.item(row)
+            if not root_item:
+                continue
+            self._update_item_highlight_recursive(root_item)
+
+    def _update_item_highlight_recursive(self, item):
+        """ 재귀적으로 트리 아이템 하이라이트 업데이트 """
+        if not item:
+            return
+
+        full_text = item.text()
+        item_path = ""
+        if " : " in full_text:
+            item_path = full_text.split(" : ", 1)[1].strip()
+        elif "\t:" in full_text:
+            item_path = full_text.split("\t:")[1].strip()
+        elif ":" in full_text:
+            item_path = full_text.split(":", 1)[1].strip()
+
+        is_selected = False
+        if item_path:
+            for df in self.model_tree_displayed_files:
+                if df and item_path.lower() == df.lower():
+                    is_selected = True
+                    break
+
+        if is_selected:
+            item.setBackground(QBrush(QColor("#D1D5DB")))
+            item.setForeground(QBrush(QColor("#374151")))
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
+        else:
+            item.setBackground(QBrush(Qt.GlobalColor.transparent))
+            item.setForeground(QBrush(Qt.GlobalColor.black))
+            font = item.font()
+            font.setBold(False)
+            item.setFont(font)
+
+        # 자식 아이템들도 재귀적으로 처리
+        for row in range(item.rowCount()):
+            child = item.child(row)
+            if child:
+                self._update_item_highlight_recursive(child)
 
     def model_tree_item_right_clicked(self, pos):
    # 트리 뷰 마우스 우클릭 팝업 메뉴 화면 처리 
@@ -1050,6 +1160,7 @@ class FilesTab(QWidget):
         save_project_action   = QAction("💾 Project Files Deep 복사/저장하기", self)
         save_runfile_action   = QAction("💾 Project Files Soft 복사/저장하기", self)
         save_as_action        = QAction("📝 다른 이름으로 저장하기...", self)
+        compare_action        = QAction("🔀 Compare Two Files (Merger)", self)
         run_openfast_action   = QAction("▶️ OpenFAST 실행하기", self)
         run_multi_case_action = QAction("▶️ Multi-Case 실행하기", self)
 
@@ -1061,6 +1172,8 @@ class FilesTab(QWidget):
         menu.addAction(save_runfile_action)
         menu.addAction(save_as_action)
         menu.addSeparator() # Separator line 
+        menu.addAction(compare_action)
+        menu.addSeparator() # Separator line
         menu.addAction(run_openfast_action)
         menu.addAction(run_multi_case_action)
 
@@ -1070,805 +1183,11 @@ class FilesTab(QWidget):
         save_runfile_action.triggered.connect(lambda:    self.mouse_Rclick_save_project_soft(text))       
         save_as_action.triggered.connect(lambda:         self.mouse_Rclick_save_file(text))
         export_text_action.triggered.connect(lambda:     print(f"[선택] 절대 경로 복사 target: {text}"))
+        compare_action.triggered.connect(lambda:         self.mouse_Rclick_compare_files())
         run_openfast_action.triggered.connect(lambda:    self.mouse_Rclick_run_openfast(text))
         run_multi_case_action.triggered.connect(lambda:  self.mouse_Rclick_run_multi_case(text))
         
         menu.exec(self.model_tree.mapToGlobal(pos))  # 마우스가 클릭된 전역 좌표(화면 기준 주소)에 메뉴판 오픈
-
-
-
-    def btn_left_run_clicked(self, checked=False):
-        """선택된 .fst 파일 → process_tree_add_to_pending 호출 (Error 파일 재실행 가능)"""
-        selected = self.dir_tree.selectedIndexes()
-        if not selected:
-            print("[Run] 선택된 항목이 없습니다.")
-            return
-        
-        # 중복 방지: 이미 런예정/런중에 있는 파일은 추가 안 함, Error/완료 상태인 파일은 제거 후 재실행 가능
-        existing_paths = set()
-        error_items = {}  # {file_path: item} - 재실행 가능한 Error 상태 항목
-        
-        for i in range(self.process_tree.topLevelItemCount()):
-            item = self.process_tree.topLevelItem(i)
-            if item:
-                file_path = item.data(0, Qt.UserRole)
-                existing_paths.add(file_path)
-                
-                # Error 상태인 항목은 재실행을 위해 보관
-                item_status = item.data(1, Qt.UserRole)
-                if item_status in [PROCESS_TREE_STATUS_ERROR, PROCESS_TREE_STATUS_COMPLETED]:
-                    error_items[file_path] = item
-        
-        for index in selected:
-            item = self.dir_tree_model.itemFromIndex(index)
-            if not item:
-                continue
-            file_path = item.data(Qt.UserRole)
-            
-            # 🔄 Error/Completed 상태면 기존 항목 제거 후 재실행
-            if file_path in existing_paths and file_path in error_items:
-                old_item = error_items[file_path]
-                row = self.process_tree.indexOfTopLevelItem(old_item)
-                if row != -1:
-                    self.process_tree.takeTopLevelItem(row)  # 기존 Error 아이템 제거
-                
-                # 큐에서도 제거
-                if file_path in self.process_tree_run_queue["completed"]:
-                    self.process_tree_run_queue["completed"] = [
-                        x for x in self.process_tree_run_queue["completed"] 
-                        if x.get("path") != file_path
-                    ]
-                
-                # 🟢 새로 pending 추가 → 자동 실행 시작
-                self.process_tree_add_to_pending(file_path)
-                continue
-            
-            # 일반 중복 방지
-            if file_path in existing_paths:
-                continue  # 런예정/런중 상태면 스킵
-            
-            # 런예정에 추가
-            self.process_tree_add_to_pending(file_path)
-
-    def process_tree_add_to_pending(self, file_path):
-        """런예정 리스트에 항목 추가 → 즉시 실행 가능 여부 확인"""
-        item = QTreeWidgetItem([os.path.basename(file_path), "pending", "", ""])
-        item.setData(0, Qt.UserRole, file_path)
-        item.setData(1, Qt.UserRole, PROCESS_TREE_STATUS_PENDING)
-        self.process_tree_apply_status_style(item, PROCESS_TREE_STATUS_PENDING)
-        
-        self.process_tree.addTopLevelItem(item)
-        self.process_tree_run_queue["pending"].append(file_path)
-        
-        # 실행 가능 여부 확인 후 즉시 시작
-        self.process_tree_try_start_next()
-
-    def process_tree_try_start_next(self):
-        """running process 개수 확인 → 설정 이하이면 런예정에서 실행 시작"""
-        running_count = len(self.process_tree_run_queue["running"])
-        
-        while running_count < self.process_tree_max_concurrent:
-            if not self.process_tree_run_queue["pending"]:
-                break
-            
-            file_path = self.process_tree_run_queue["pending"].pop(0)
-            
-            # QTreeWidgetItem 찾기
-            item = self.process_tree_find_item_by_path(file_path)
-            if item:
-                self.process_tree_move_to_running(item, file_path)
-                running_count += 1
-
-    def process_tree_move_to_running(self, item, file_path):
-        """런예정 → 런중으로 이동 및 OpenFAST 실행"""
-        start_time = datetime.now().strftime("%H:%M:%S")
-        item.setText(2, start_time)
-        item.setData(1, Qt.UserRole, PROCESS_TREE_STATUS_RUNNING)
-        self.process_tree_apply_status_style(item, PROCESS_TREE_STATUS_RUNNING)
-        
-        self.process_tree_run_queue["running"].append(file_path)
-        
-        # 자동으로 첫 번째 런중 파일의 로그 보기
-        if not getattr(self, 'current_viewing_path', ''):
-            self.current_viewing_path = file_path
-            if hasattr(self, 'cmd_output'):
-                self.cmd_output.clear()
-                self.cmd_output.append(f"📡 [{os.path.basename(file_path)}] 실행 중...\n")
-        
-        self.process_tree_execute_openfast(item, file_path)
-
-    def process_tree_move_to_completed(self, item, file_path, status, is_error=False):
-        """running → completed 이동 """
-        print(f"{item} file_path: {file_path} 상태 변경: {status} (에러 여부: {is_error})")
-
-        end_time = datetime.now().strftime("%H:%M:%S")
-        item.setText(3, end_time)       # 종료 시간
-        item.setData(1, Qt.UserRole, status) 
-        self.process_tree_apply_status_style(item, status) 
-        
-        self.process_tree_run_queue["completed"].append({
-            "path": file_path,
-            "success": not is_error,
-            "end_time": end_time
-        })
-
-    def process_tree_apply_status_style(self, item, status):
-        """평면 리스트 아이템 상태별 배경색 및 글자색 적용 (Stop 상태 추가)"""
-        
-        # === 상태별 색상 정의 ===
-        colors = {
-            PROCESS_TREE_STATUS_PENDING:   {"bg": "#FFFFFF", "fg": "#000000", "text": "Pending"},       #  (예정)
-            PROCESS_TREE_STATUS_RUNNING:   {"bg": "#DCFCE7", "fg": "#000000", "text": "Running"},       #  (런중)
-            PROCESS_TREE_STATUS_COMPLETED: {"bg": "#D1D5DB", "fg": "#000000", "text": "Completed"},     #  (완료)
-            PROCESS_TREE_STATUS_STOP:      {"bg": "#D1D5DB", "fg": "#000000", "text": "Stopped"},       #  (중단)
-            PROCESS_TREE_STATUS_ERROR:     {"bg": "#D1D5DB", "fg": "#EF4444", "text": "Error"},         #  빨간 글자 (에러)
-        }
-        
-        if status not in colors:
-            return
-        
-        style = colors[status]
-        
-        # 모든 컬럼에 동일한 스타일 적용
-        for col in range(4):  # File, Status, Start, Finish
-            item.setBackground(col, QBrush(QColor(style["bg"])))
-            item.setForeground(col, QBrush(QColor(style["fg"])))
-        
-        item.setText(1, style["text"])
-
-    def process_tree_find_item_by_path(self, file_path):
-        """평면 리스트에서 파일 경로로 QTreeWidgetItem 찾기"""
-        for i in range(self.process_tree.topLevelItemCount()):
-            item = self.process_tree.topLevelItem(i)
-            if item and item.data(0, Qt.UserRole) == file_path:
-                return item
-        return None
-
-    def process_tree_execute_openfast(self, item, file_path):
-        """OpenFAST 프로세스 실행 및 완료 콜백 (트리거링) 설정"""
-        proc = QProcess(self)
-        self.process_tree_process_map[file_path] = proc
-        
-        # 💡 기존 원본 코드의 OpenFAST 경로 탐색 방식 적용
-        settings = QSettings("JHLEE", "OFA")
-        openfast_exe = settings.value("OpenFastExe", "")
-
-        if not openfast_exe or not os.path.exists(openfast_exe):
-            default_paths = [
-                r"C:\OpenFAST\openfast.exe",
-                r"C:\Program Files\OpenFAST\openfast.exe",
-                r"C:\Users\jeong\Downloads\BU_openFAST\OpenFAST.exe",  # 사용자 환경 경로 포용
-            ]
-            for p in default_paths:
-                if os.path.exists(p):
-                    openfast_exe = p
-                    break
-
-        if not openfast_exe or not os.path.exists(openfast_exe):
-            QMessageBox.critical(self, "OpenFAST 없음", "OpenFAST 실행 파일을 찾을 수 없습니다.")
-            self.process_tree_handle_process_finished(item, file_path, 1)
-            return
-        
-        try:
-            # QProcess 설정 및 실행
-            proc.setProgram(openfast_exe)
-            proc.setArguments([file_path])
-            proc.setWorkingDirectory(os.path.dirname(file_path))
-            
-            # Openfast 실행중 콜백 연결 (실행에 따른 트리거링) 및 실행완료 시 트리거링
-            proc.readyReadStandardOutput.connect(
-                lambda: self.process_tree_stream_output(proc, file_path)
-            )
-            proc.finished.connect(
-                lambda exit_code, exit_status, it=item, fp=file_path:
-                self.process_tree_handle_process_finished(it, fp, exit_code)
-            )
-            
-            proc.start()
-            print(f"🚀 OpenFAST 프로세스 시작: {file_path}")
-            
-        except Exception as e:
-            QMessageBox.critical(self, "실행 오류", f"OpenFAST 실행 실패:\n{str(e)}")
-            self.process_tree_handle_process_finished(item, file_path, 1)
-
-    def process_tree_handle_process_finished(self, item, file_path, exit_code):
-        """OpenFAST 실행 완료 콜백"""
-        # 💡 [수정] UI 객체가 이미 삭제되었다면 아무 작업도 하지 않고 즉시 종료
-        if not self or not hasattr(self, 'process_tree') or not self.process_tree:
-            print(f"⚠️ [Warning] UI has been destroyed. Skipping process finish handling for {os.path.basename(file_path)}.")
-            return
-
-        # 큐에서 런중 제거
-        if file_path in self.process_tree_run_queue["running"]:
-            self.process_tree_run_queue["running"].remove(file_path)
-
-        # 해당 file_path에 대한 QProcess 객체를 process_tree_process_map에서 제거
-        if file_path in self.process_tree_process_map:
-            del self.process_tree_process_map[file_path]
-
-        # 런중 → 런완료로 이동
-        current_item_in_tree = self.process_tree_find_item_by_path(file_path)
-        if current_item_in_tree: # 아이템이 아직 트리에 있다면 업데이트
-            success = (exit_code == 0)
-            self.process_tree_move_to_completed(current_item_in_tree, file_path, 
-                                                PROCESS_TREE_STATUS_COMPLETED if success else PROCESS_TREE_STATUS_ERROR,
-                                                is_error=not success)
-        else: # 아이템이 이미 트리에 없다면 (사용자가 삭제했을 가능성) 로그만 업데이트
-            print(f"⚠️ [Warning] Process finished for {os.path.basename(file_path)}, but its UI item was already removed.")
-            if file_path in self.process_logs:
-                self.process_logs[file_path] += f"\n✅ [Finished] Process End (UI item removed by user): {os.path.basename(file_path)}\n"
-        
-        # 실행 가능한 다음 항목 시작
-        self.process_tree_try_start_next()
-
-    def process_tree_stream_output(self, proc, file_path):
-        """OpenFAST 로그 스트리밑 + 진행률 파싱 → Finish 컬럼에 % 표시"""
-        # print(f"📡 [Streaming] OpenFAST 로그 수신 중: {file_path}")
-        try:
-            data = proc.readAllStandardOutput().data().decode('utf-8', errors='ignore')
-            if data:
-                # 1. 로그 누적
-                if not hasattr(self, 'process_logs'):
-                    self.process_logs = {}
-                if file_path not in self.process_logs:
-                    self.process_logs[file_path] = ""
-                self.process_logs[file_path] += data
-
-                # 2. 진행률 파싱 후 Finish 컬럼에 표시
-                match = PROGRESS_RE.search(data)
-                if match:
-                    current_sec = int(match.group(1))
-                    total_sec = int(match.group(2))
-                    
-                    
-                    item = self.process_tree_find_item_by_path(file_path) # Check item existence
-                    if item and total_sec > 0: # Only update if item exists and total_sec is valid
-                        progress_pct = int((current_sec / total_sec) * 100)
-                        # 아이템 찾아서 컬럼 3 (Finish) 에 진행률 표시
-                        item = self.process_tree_find_item_by_path(file_path)
-                        if item and item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_RUNNING:
-                            item.setText(3, f"{progress_pct}%")  # 👈 진행률 표시
-
-                # 3. 선택된 파일 로그만 cmd_output에 출력
-                if (hasattr(self, 'cmd_output') and 
-                    getattr(self, 'current_viewing_path', '') == file_path):
-                    self.cmd_output.append(data)
-                    self.cmd_output.moveCursor(QtGui.QTextCursor.End)
-
-        except Exception as e:
-            print(f"❌ 로그 스트리밍 중 예외 발생: {e}")
-
-    def process_tree_on_item_clicked(self, index):
-        """클릭 시 해당 파일의 누적 로그 표시 (자동 스크롤 맨 아래)"""
-        print(f"process_tree_on_item_clicked(index) 호출됨: index={index.row()}")
-
-        item = self.process_tree.itemFromIndex(index)
-        if not item:
-            return
-            
-        file_path = item.data(0, Qt.UserRole)
-        if not file_path:
-            return
-            
-        self.current_viewing_path = file_path
-        
-        if hasattr(self, 'cmd_output') and hasattr(self, 'process_logs'):
-            self.cmd_output.clear()
-            log_text = self.process_logs.get(file_path, "아직 생성된 로그가 없습니다.\n")
-            self.cmd_output.setPlainText(log_text)
-            self.cmd_output.moveCursor(QtGui.QTextCursor.End)  # 👈 맨 아래로 스크롤
-
-    def process_tree_on_item_selection_changed(self):
-        """평면 리스트에서 선택 변경 시 버튼 동작 전환 + Bold 처리"""
-        print("process_tree_on_item_selection_changed() 호출됨")
-
-        selected_items = self.process_tree.selectedItems()
-        
-        # 모든 아이템 폰트 일관 처리: 선택 = Bold / 비선택 = Normal
-        font_bold = QFont()
-        font_bold.setBold(True)
-        font_normal = QFont()
-        font_normal.setBold(False)
-        
-        # 모든 아이템 순회 → 선택된 것만 Bold
-        for i in range(self.process_tree.topLevelItemCount()):
-            item = self.process_tree.topLevelItem(i)
-            if item:
-                is_selected = item.isSelected()
-                for col in range(item.columnCount()):
-                    # 선택된 아이템 → Bold 폰트, 비선택 아이템 → Normal 폰트 (Bold 해제)
-                    item.setFont(col, font_bold if is_selected else font_normal)
-
-                item_status = item.data(1, Qt.UserRole)
-                self.process_tree_apply_status_style(item, item_status)
-        
-        # 버튼 전환 로직
-        if not selected_items:
-            print("[Process Tree] 선택된 항목이 없습니다. 버튼 상태 초기화.")
-            self.process_tree_reset_buttons()
-            return
-        
-        first_item = selected_items[0]
-        item_status = first_item.data(1, Qt.UserRole)
-        
-        # 상태가 다른 아이템이 섞여 있으면 선택 해제 (방지)
-        for item in selected_items:
-            if item.data(1, Qt.UserRole) != item_status:
-                item.setSelected(False)
-        
-        # 버튼 전환
-        if item_status == PROCESS_TREE_STATUS_RUNNING:
-            self.process_tree_set_stop_button_active()
-            print("process_tree_set_stop_button_active() 호출됨")
-        else:
-            self.process_tree_set_remove_button_active(item_status)
-            print("process_tree_set_remove_button_active() 호출됨")
-
-    def process_tree_set_stop_button_active(self):
-        """Stop 버튼으로 전환 (런중 아이템 선택 시)"""
-        self.btn_left_stop.setText("🛑 Stop")
-        self.btn_left_stop.setEnabled(True)
-        self.btn_left_stop.setEnabled(True) # Enable the button
-        try:
-            self.btn_left_stop.clicked.disconnect() # Disconnect any previous connections
-        except RuntimeError: # Catch if no slot was connected
-            pass
-        self.btn_left_stop.clicked.connect(self.process_tree_handle_stop_clicked)
-
-    def process_tree_set_remove_button_active(self, status):
-        """Remove 버튼으로 전환 (running/completed/stop 아이템 선택 시)"""
-        self.btn_left_stop.setText("🗑️ Remove")
-        self.btn_left_stop.setEnabled(True)
-        try:
-            self.btn_left_stop.clicked.disconnect()
-        except RuntimeError:
-            pass
-        self.btn_left_stop.clicked.connect(lambda: self.process_tree_handle_remove_clicked(status)) # noqa
-
-    def process_tree_reset_buttons(self):
-        """단추 원래 상태로 리셋"""
-        self.btn_left_stop.setText("🛑 Stop")
-        self.btn_left_stop.setEnabled(False)
-        try:
-            self.btn_left_stop.clicked.disconnect()
-        except RuntimeError:
-            pass
-
-    def process_tree_handle_stop_clicked(self):
-        """런중 아이템 선택 → Stop 버튼 → 3단계 강제 종료"""
-        selected = [it for it in self.process_tree.selectedItems() 
-                    if it.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_RUNNING]
-        
-        if not selected:
-            return
-        
-        reply = QMessageBox.question(
-            self, "실행 중단",
-            f"선택한 {len(selected)}개의 프로세스를 중단하시겠습니까?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        if reply == QMessageBox.No:
-            return
-        
-        for item in selected:
-            file_path = item.data(0, Qt.UserRole)
-            proc = self.process_tree_process_map.get(file_path)
-
-            # Remove from running queue and process map immediately
-            if file_path in self.process_tree_run_queue["running"]:
-                self.process_tree_run_queue["running"].remove(file_path)
-            if file_path in self.process_tree_process_map:
-                del self.process_tree_process_map[file_path]
-
-            # Disconnect signals immediately to prevent further updates from QProcess
-            
-            if proc and proc.state() == QProcess.Running:
-                import subprocess as sp
-                
-                # 🛑 1단계: terminate (SIGTERM)
-                proc.terminate()
-                try:
-                    proc.waitForFinished(2000)
-                except:
-                    pass
-                
-                # 🛑 2단계: kill (SIGKILL)
-                if proc.state() == QProcess.Running:
-                    proc.kill()
-                    try:
-                        proc.waitForFinished(3000)
-                    except:
-                        pass
-                
-                # 🛑 3단계: system-level taskkill (자식 프로세스 포함) — ★ 핵심!
-                if proc.state() == QProcess.Running:
-                    try:
-                        pid = proc.pid()
-                        # /T: 자식 프로세스 포함, /F: 강제 종료
-                        result = sp.run(
-                            f'taskkill /F /PID {pid} /T',
-                            shell=True, capture_output=True, text=True, timeout=5
-                        )
-                        print(f"⚡ [System Kill] PID={pid}: {result.stdout.strip()}")
-                        
-                        proc.waitForFinished(1000)
-                    except Exception as e:
-                        print(f"⚠️ [System Kill 예외] {e}")
-                
-                # 🧹 4단계: 정리
-                self.process_tree_process_map.pop(file_path, None)
-                try:
-                    proc.readyReadStandardOutput.disconnect()
-                    proc.readyReadStandardError.disconnect()
-                    proc.finished.disconnect()
-                except RuntimeError:
-                    pass
-
-
-                # Update process_logs to reflect termination
-                if file_path in self.process_logs:
-                    self.process_logs[file_path] += f"\n❌ [Stopped by User] Process Terminated: {os.path.basename(file_path)}\n"
-                
-                # 상태 로그
-                state = proc.state()
-                if state == QProcess.Running:
-                    # If it's still running after all attempts, mark as error
-                    self.process_tree_move_to_completed(item, file_path, PROCESS_TREE_STATUS_ERROR, is_error=True)
-                    if file_path in self.process_tree_run_queue["running"]:
-                        self.process_tree_run_queue["running"].remove(file_path)
-                    print(f"❌ [Stop] 종료 실패: {os.path.basename(file_path)} (PID: {proc.pid()})")
-                else:
-                    print(f"✅ [Stop] 종료 성공: {os.path.basename(file_path)}")
-            
-            # UI 상태 변경
-            self.process_tree_move_to_completed(item, file_path, PROCESS_TREE_STATUS_STOP, True)
-            self.process_tree_set_remove_button_active(PROCESS_TREE_STATUS_STOP)
-            # Remove from running queue
-            if file_path in self.process_tree_run_queue["running"]:
-                self.process_tree_run_queue["running"].remove(file_path)
-        
-        # 다음 런예정 시작
-        self.process_tree_try_start_next()
-
-    def process_tree_handle_remove_clicked(self, status):
-        """런예정/런완료/Stop 아이템 선택 → Remove 버튼 → 리스트에서 제거"""
-        selected = [it for it in self.process_tree.selectedItems()
-                    if it.data(1, Qt.UserRole) == status or (status in [PROCESS_TREE_STATUS_COMPLETED, PROCESS_TREE_STATUS_STOP, PROCESS_TREE_STATUS_ERROR] and it.data(1, Qt.UserRole) in [PROCESS_TREE_STATUS_COMPLETED, PROCESS_TREE_STATUS_STOP, PROCESS_TREE_STATUS_ERROR])]
-        
-        # Use a copy of the list to iterate over, as we'll be modifying the original
-        items_to_remove = list(selected)
-
-        for item in items_to_remove:
-            file_path = item.data(0, Qt.UserRole)
-
-            # If a running process is being removed, terminate it and disconnect signals
-            if item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_RUNNING:
-                proc = self.process_tree_process_map.get(file_path)
-                if proc and proc.state() == QProcess.Running:
-                    print(f"⚠️ [Warning] Removing running process {os.path.basename(file_path)}. Terminating it.")
-                    try:
-                        proc.readyReadStandardOutput.disconnect()
-                        proc.readyReadStandardError.disconnect()
-                        proc.finished.disconnect()
-                    except RuntimeError:
-                        pass
-                    proc.terminate()
-                    proc.waitForFinished(1000)
-                    if proc.state() == QProcess.Running:
-                        proc.kill()
-                        proc.waitForFinished(1000)
-                    if proc.state() == QProcess.Running:
-                        try:
-                            pid = proc.pid()
-                            subprocess.run(
-                                f'taskkill /F /PID {pid} /T',
-                                shell=True, capture_output=True, text=True, timeout=5,
-                                creationflags=subprocess.CREATE_NO_WINDOW
-                            )
-                            print(f"⚡ [System Kill] PID={pid} for removed item.")
-                        except Exception as e:
-                            print(f"⚠️ [System Kill Exception] for removed item: {e}")
-                
-                # Remove from process map and running queue
-                if file_path in self.process_tree_process_map:
-                    del self.process_tree_process_map[file_path]
-                if file_path in self.process_tree_run_queue["running"]:
-                    self.process_tree_run_queue["running"].remove(file_path)
-
-            # 큐에서도 제거
-            queue_key = {PROCESS_TREE_STATUS_PENDING: "pending", 
-                         PROCESS_TREE_STATUS_COMPLETED: "completed",
-                         PROCESS_TREE_STATUS_STOP: "completed",
-                         PROCESS_TREE_STATUS_ERROR: "completed"}.get(item.data(1, Qt.UserRole))
-            if queue_key and file_path in self.process_tree_run_queue[queue_key]:
-                self.process_tree_run_queue[queue_key].remove(file_path)
-            
-            # 👇 flat view용: topLevelItem 직접 제거
-            row = self.process_tree.indexOfTopLevelItem(item)
-            if row != -1:
-                self.process_tree.takeTopLevelItem(row) # This deletes the QTreeWidgetItem
-
-        # After removal, update button states and try to start next pending process
-        self.process_tree_on_item_selection_changed() # Re-evaluate button states
-        self.process_tree_try_start_next()
-
-        
-
-    def get_current_working_dir(self):
-        """현재 작업 디렉토리 반환 (마지막 .fst 경로 기반)"""
-        if self.process_tree_run_queue["pending"]:
-            return os.path.dirname(self.process_tree_run_queue["pending"][0])
-        settings = QSettings("JHLEE", "OFA")
-        last_fst = settings.value("LastFstPath_fst", "")
-        return os.path.dirname(last_fst) if last_fst else os.getcwd()
-
-    def process_tree_adjust_run_count(self, event=None):
-        """최대 동시 실행 개수 조절 (ProcessQueueManager에 위임)"""
-        new_count = self.queue_mgr.adjust_max_concurrent(self, self.queue_mgr.queue.max_concurrent)
-        if new_count is not None and hasattr(self, 'cmd_output'):
-            self.cmd_output.append(f"⚙️ 최대 동시 실행 개수: {new_count}로 설정됨\n")
-
-    def cleanup_processes(self):
-        """애플리케이션 종료 시 모든 실행 중인 QProcess를 정리합니다."""
-        print("[Cleanup] 모든 실행 중인 프로세스를 종료합니다...")
-        
-        # process_tree_process_map의 복사본을 만들어 순회 (원본 딕셔너리 변경에 따른 문제 방지)
-        for file_path, proc in list(self.process_tree_process_map.items()):
-            if proc and proc.state() == QProcess.Running:
-                try:
-                    # 시그널 연결 해제 (메모리 누수 및 충돌 방지)
-                    proc.readyReadStandardOutput.disconnect()
-                    proc.finished.disconnect()
-                except RuntimeError:
-                    pass # 이미 연결이 끊어진 경우
-                proc.kill()  # 프로세스 강제 종료
-                proc.waitForFinished(1000) # 1초 대기
-                print(f"  -> 🛑 종료: {os.path.basename(file_path)}")
-        self.process_tree_process_map.clear()
-
-
-    def process_tree_move_selected_up(self):
-        """Shift + ↑ : 런예정 리스트 내 선택항목 위로 이동"""
-        selected_items = self.process_tree.selectedItems()
-        if not selected_items:
-            return
-
-        # PENDING 상태인 항목만 필터링
-        pending_items = [it for it in selected_items if it.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING]
-        if not pending_items:
-            return
-
-        # 올바른 순서로 이동하기 위해 행 번호 기준으로 정렬
-        pending_items.sort(key=lambda item: self.process_tree.indexOfTopLevelItem(item))
-
-        for item in pending_items:
-            row = self.process_tree.indexOfTopLevelItem(item)
-            if row > 0:
-                # 바로 위 아이템이 PENDING 상태가 아니면 이동하지 않음
-                above_item = self.process_tree.topLevelItem(row - 1)
-                if above_item and above_item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING:
-                    self.process_tree.takeTopLevelItem(row)
-                    self.process_tree.insertTopLevelItem(row - 1, item)
-                    item.setSelected(True)
-
-        # 큐 순서도 동기화
-        self.process_tree_resync_pending_queue()
-
-    def process_tree_move_selected_down(self):
-        """Shift + ↓ : 런예정 리스트 내 선택항목 아래로 이동"""
-        selected_items = self.process_tree.selectedItems()
-        if not selected_items:
-            return
-
-        pending_items = [it for it in selected_items if it.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING]
-        if not pending_items:
-            return
-
-        # 아래에서 위로 순서로 정렬해야 인덱스가 꼬이지 않음
-        pending_items.sort(key=lambda item: self.process_tree.indexOfTopLevelItem(item), reverse=True)
-
-        for item in pending_items:
-            row = self.process_tree.indexOfTopLevelItem(item)
-            # 마지막 아이템이 아니어야 함
-            if row < self.process_tree.topLevelItemCount() - 1:
-                below_item = self.process_tree.topLevelItem(row + 1)
-                if below_item and below_item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING:
-                    self.process_tree.takeTopLevelItem(row)
-                    self.process_tree.insertTopLevelItem(row + 1, item)
-                    item.setSelected(True)
-
-        self.process_tree_resync_pending_queue()
-
-    def process_tree_resync_pending_queue(self):
-        """UI 순서를 큐 데이터와 동기화"""
-        self.process_tree_run_queue["pending"] = [
-            self.process_tree.topLevelItem(i).data(0, Qt.UserRole)
-            for i in range(self.process_tree.topLevelItemCount())
-            if self.process_tree.topLevelItem(i).data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING
-        ]
-
-    def keyPressEvent(self, event):
-        if event.modifiers() & Qt.ShiftModifier:
-            if event.key() == Qt.Key_Up:
-                self.process_tree_move_selected_up()
-                return
-            elif event.key() == Qt.Key_Down:
-                self.process_tree_move_selected_down()
-                return
-        super().keyPressEvent(event)
-
-    def process_tree_save_run_queue(self):
-        """실행 큐 상태를 .ofa_run_queue.json으로 저장"""
-        queue_data = {
-            "pending": self.process_tree_run_queue["pending"],
-            "running": self.process_tree_run_queue["running"],
-            "completed": self.process_tree_run_queue["completed"],
-            "max_concurrent": self.process_tree_max_concurrent,
-            "timestamp": datetime.now().isoformat(),
-        }
-        
-        save_path = os.path.join(self.get_current_working_dir(), ".ofa_run_queue.json")
-        try:
-            with open(save_path, 'w', encoding='utf-8') as f:
-                json.dump(queue_data, f, indent=2)
-            # cmd_output에 저장 완료 메시지
-            if hasattr(self, 'cmd_output'):
-                self.cmd_output.append(f"💾 실행 큐 상태 저장: {save_path}\n")
-        except Exception as e:
-            print(f"❌ 큐 저장 실패: {e}")
-
-    def process_tree_load_run_queue(self):
-        """저장된 실행 큐 상태 복구 (사용자 확인 후)"""
-        save_path = os.path.join(self.get_current_working_dir(), ".ofa_run_queue.json")
-        if not os.path.exists(save_path):
-            return
-        
-        # 파일 수정 시간 확인
-        mtime = datetime.fromtimestamp(os.path.getmtime(save_path))
-        
-        reply = QMessageBox.question(
-            self, "실행 상태 복구",
-            f"이전 실행 상태가 발견되었습니다.\n\n"
-            f"저장 시간: {mtime.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"복구하시겠습니까?\n\n"
-            f"(이미 완료된 작업은 런완료로, 진행 중이던 작업은 런예정으로 복구됩니다.)",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
-        )
-        
-        if reply == QMessageBox.No:
-            return
-        
-        try:
-            with open(save_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            self.process_tree_restore_queue(data)
-            if hasattr(self, 'cmd_output'):
-                self.cmd_output.append("🔄 실행 큐 상태 복구 완료\n")
-        except Exception as e:
-            QMessageBox.warning(self, "복구 실패", f"실행 상태 복구 중 오류:\n{e}")
-
-    def process_tree_restore_queue(self, data):
-        """복구된 데이터로 큐와 UI 재구성"""
-        # 기존 트리 비우기
-        self.process_tree.clear()
-        
-        # 큐 복원
-        self.process_tree_run_queue = {
-            "pending": data.get("pending", []),
-            "running": data.get("running", []),   # 재시작 시에는 모두 런예정으로 처리
-            "completed": data.get("completed", []),
-        }
-        self.process_tree_max_concurrent = data.get("max_concurrent", 3)
-        
-        # 런중 → 런예정으로 이동 (재시작 시)
-        restored_running = self.process_tree_run_queue["running"]
-        self.process_tree_run_queue["pending"] = restored_running + self.process_tree_run_queue["pending"]
-        self.process_tree_run_queue["running"] = []
-        
-        # UI 재구성
-        # 1. 런예정 항목 추가
-        for fp in self.process_tree_run_queue["pending"]:
-            self.process_tree_add_to_pending(fp)
-
-        # 2. 런완료/에러/중단 항목 복원
-        for completed_info in self.process_tree_run_queue.get("completed", []):
-            path = completed_info.get("path")
-            success = completed_info.get("success")
-            status = PROCESS_TREE_STATUS_COMPLETED if success else PROCESS_TREE_STATUS_ERROR
-            item = QTreeWidgetItem([os.path.basename(path), "", "", ""])
-            item.setData(0, Qt.UserRole, path)
-            self.process_tree_move_to_completed(item, path, status, is_error=not success)
-            self.process_tree.addTopLevelItem(item)
-
-
-
-
-#-------------------------------------------------------------------
-
-    def _on_queue_item_added(self, item):
-        """큐에 새 아이템 추가 시 UI 트리에 추가"""
-        qt_item = QTreeWidgetItem([os.path.basename(item.path), "Pending", "", ""])
-        qt_item.setData(0, Qt.UserRole, item.path)
-        qt_item.setData(1, Qt.UserRole, item.status)
-        self._apply_status_style(qt_item, item.status)
-        self.process_tree.addTopLevelItem(qt_item)
-        item.qt_item = qt_item
-
-    def _on_queue_item_updated(self, item):
-        """큐 아이템 상태 변경 시 UI 업데이트"""
-        qt_item = getattr(item, 'qt_item', None)
-        if qt_item:
-            self._apply_status_style(qt_item, item.status)
-            if item.start_time:
-                qt_item.setText(2, item.start_time)
-            if item.end_time:
-                qt_item.setText(3, item.end_time)
-
-    def _on_queue_item_removed(self, item):
-        """큐에서 아이템 제거 시 UI에서 제거"""
-        qt_item = getattr(item, 'qt_item', None)
-        if qt_item:
-            row = self.process_tree.indexOfTopLevelItem(qt_item)
-            if row != -1:
-                self.process_tree.takeTopLevelItem(row)
-
-    def _on_queue_log_received(self, file_path: str, data: str):
-        """로그 수신 시 process_logs 업데이트"""
-        if not hasattr(self, 'process_logs'):
-            self.process_logs = {}
-        if file_path not in self.process_logs:
-            self.process_logs[file_path] = ""
-        self.process_logs[file_path] += data
-        
-        if getattr(self, 'current_viewing_path', '') == file_path:
-            if hasattr(self, 'cmd_output'):
-                self.cmd_output.append(data)
-                self.cmd_output.moveCursor(QtGui.QTextCursor.End)
-
-    def _on_queue_progress_updated(self, file_path: str, percent: int):
-        """진행률 업데이트 시 Finish 컬럼에 표시"""
-        item = self._find_qt_item_by_path(file_path)
-        if item and item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_RUNNING:
-            item.setText(3, f"{percent}%")
-
-    def _on_queue_buttons_update(self):
-        """버튼 상태 업데이트 요청"""
-        if hasattr(self, 'process_tree_on_item_selection_changed'):
-            self.process_tree_on_item_selection_changed()
-
-    def _find_qt_item_by_path(self, file_path: str):
-        """경로로 QTreeWidgetItem 찾기"""
-        for i in range(self.process_tree.topLevelItemCount()):
-            item = self.process_tree.topLevelItem(i)
-            if item and item.data(0, Qt.UserRole) == file_path:
-                return item
-        return None
-
-    def _apply_status_style(self, item, status):
-        """아이템에 상태별 스타일 적용"""
-        status_map = {
-            0: {"bg": "#FFFFFF", "fg": "#000000", "text": "Pending"},
-            1: {"bg": "#DCFCE7", "fg": "#000000", "text": "Running"},
-            2: {"bg": "#D1D5DB", "fg": "#000000", "text": "Completed"},
-            3: {"bg": "#D1D5DB", "fg": "#000000", "text": "Stopped"},
-            4: {"bg": "#D1D5DB", "fg": "#EF4444", "text": "Error"},
-        }
-        style = status_map.get(status)
-        if not style:
-            return
-        for col in range(4):
-            item.setBackground(col, QBrush(QColor(style["bg"])))
-            item.setForeground(col, QBrush(QColor(style["fg"])))
-        item.setText(1, style["text"])
-
-#-------------------------------------------------------------------
-
-
-
-
 
     def mouse_Rclick_open_directory(self, text):
         """ 우클릭 메뉴에서 'Open Directory'를 선택했을 때 실제 폴더를 열어주는 함수 """
@@ -2540,6 +1859,821 @@ class FilesTab(QWidget):
 
         self.model_tree_update(main_fst_path)
 
+    def mouse_Rclick_compare_files(self):
+        """ 선택된 두 파일을 Merger로 비교 """
+        if not hasattr(self, 'model_tree_displayed_files') or len(self.model_tree_displayed_files) < 2:
+            QMessageBox.warning(self, "비교 불가", "비교할 파일이 2개 선택되지 않았습니다.\nCtrl+클릭으로 두 파일을 선택하세요.")
+            return
+
+        file1 = self.model_tree_displayed_files[0]
+        file2 = self.model_tree_displayed_files[1]
+
+        if not os.path.exists(file1) or not os.path.exists(file2):
+            QMessageBox.critical(self, "오류", "선택된 파일 중 하나가 존재하지 않습니다.")
+            return
+
+        # Merger 실행 파일 경로 가져오기 (기본값: C:\Program Files\Merger\Merger.exe)
+        merger_path = r'C:\Program Files\WinMerge\WinMergeU.exe'
+
+        if not os.path.exists(merger_path):
+            QMessageBox.critical(self, "Merger 없음", f"Merger 실행 파일을 찾을 수 없습니다.\n기본 경로: {merger_path}\n\n설정에서 경로를 지정해주세요.")
+            return
+
+        try:
+            # Merger 실행: merger.exe file1 file2
+            subprocess.Popen([merger_path, file1, file2])
+            print(f"[COMPARE] Merger 실행: {file1} <-> {file2}")
+        except Exception as e:
+            QMessageBox.critical(self, "실행 오류", f"Merger 실행 중 오류 발생:\n{e}")
+
+
+
+
+    def btn_left_run_clicked(self, checked=False):
+        """선택된 .fst 파일 → process_tree_add_to_pending 호출 (Error 파일 재실행 가능)"""
+        selected = self.dir_tree.selectedIndexes()
+        if not selected:
+            print("[Run] 선택된 항목이 없습니다.")
+            return
+        
+        # 중복 방지: 이미 런예정/런중에 있는 파일은 추가 안 함, Error/완료 상태인 파일은 제거 후 재실행 가능
+        existing_paths = set()
+        error_items = {}  # {file_path: item} - 재실행 가능한 Error 상태 항목
+        
+        for i in range(self.process_tree.topLevelItemCount()):
+            item = self.process_tree.topLevelItem(i)
+            if item:
+                file_path = item.data(0, Qt.UserRole)
+                existing_paths.add(file_path)
+                
+                # Error 상태인 항목은 재실행을 위해 보관
+                item_status = item.data(1, Qt.UserRole)
+                if item_status in [PROCESS_TREE_STATUS_ERROR, PROCESS_TREE_STATUS_COMPLETED]:
+                    error_items[file_path] = item
+        
+        for index in selected:
+            item = self.dir_tree_model.itemFromIndex(index)
+            if not item:
+                continue
+            file_path = item.data(Qt.UserRole)
+            
+            # 🔄 Error/Completed 상태면 기존 항목 제거 후 재실행
+            if file_path in existing_paths and file_path in error_items:
+                old_item = error_items[file_path]
+                row = self.process_tree.indexOfTopLevelItem(old_item)
+                if row != -1:
+                    self.process_tree.takeTopLevelItem(row)  # 기존 Error 아이템 제거
+                
+                # 큐에서도 제거
+                if file_path in self.process_tree_run_queue["completed"]:
+                    self.process_tree_run_queue["completed"] = [
+                        x for x in self.process_tree_run_queue["completed"] 
+                        if x.get("path") != file_path
+                    ]
+                
+                # 🟢 새로 pending 추가 → 자동 실행 시작
+                self.process_tree_add_to_pending(file_path)
+                continue
+            
+            # 일반 중복 방지
+            if file_path in existing_paths:
+                continue  # 런예정/런중 상태면 스킵
+            
+            # 런예정에 추가
+            self.process_tree_add_to_pending(file_path)
+
+    def process_tree_add_to_pending(self, file_path):
+        """런예정 리스트에 항목 추가 → 즉시 실행 가능 여부 확인"""
+        item = QTreeWidgetItem([os.path.basename(file_path), "pending", "", ""])
+        item.setData(0, Qt.UserRole, file_path)
+        item.setData(1, Qt.UserRole, PROCESS_TREE_STATUS_PENDING)
+        self.process_tree_apply_status_style(item, PROCESS_TREE_STATUS_PENDING)
+        
+        self.process_tree.addTopLevelItem(item)
+        self.process_tree_run_queue["pending"].append(file_path)
+        
+        # 실행 가능 여부 확인 후 즉시 시작
+        self.process_tree_try_start_next()
+
+    def process_tree_try_start_next(self):
+        """running process 개수 확인 → 설정 이하이면 런예정에서 실행 시작"""
+        running_count = len(self.process_tree_run_queue["running"])
+        
+        while running_count < self.process_tree_max_concurrent:
+            if not self.process_tree_run_queue["pending"]:
+                break
+            
+            file_path = self.process_tree_run_queue["pending"].pop(0)
+            
+            # QTreeWidgetItem 찾기
+            item = self.process_tree_find_item_by_path(file_path)
+            if item:
+                self.process_tree_move_to_running(item, file_path)
+                running_count += 1
+
+    def process_tree_move_to_running(self, item, file_path):
+        """런예정 → 런중으로 이동 및 OpenFAST 실행"""
+        start_time = datetime.now().strftime("%H:%M:%S")
+        item.setText(2, start_time)
+        item.setData(1, Qt.UserRole, PROCESS_TREE_STATUS_RUNNING)
+        self.process_tree_apply_status_style(item, PROCESS_TREE_STATUS_RUNNING)
+        
+        self.process_tree_run_queue["running"].append(file_path)
+        
+        # 자동으로 첫 번째 런중 파일의 로그 보기
+        if not getattr(self, 'current_viewing_path', ''):
+            self.current_viewing_path = file_path
+            if hasattr(self, 'cmd_output'):
+                self.cmd_output.clear()
+                self.cmd_output.append(f"📡 [{os.path.basename(file_path)}] 실행 중...\n")
+        
+        self.process_tree_execute_openfast(item, file_path)
+
+    def process_tree_move_to_completed(self, item, file_path, status, is_error=False):
+        """running → completed 이동 """
+        print(f"{item} file_path: {file_path} 상태 변경: {status} (에러 여부: {is_error})")
+
+        end_time = datetime.now().strftime("%H:%M:%S")
+        item.setText(3, end_time)       # 종료 시간
+        item.setData(1, Qt.UserRole, status) 
+        self.process_tree_apply_status_style(item, status) 
+        
+        self.process_tree_run_queue["completed"].append({
+            "path": file_path,
+            "success": not is_error,
+            "end_time": end_time
+        })
+
+    def process_tree_apply_status_style(self, item, status):
+        """평면 리스트 아이템 상태별 배경색 및 글자색 적용 (Stop 상태 추가)"""
+        
+        # === 상태별 색상 정의 ===
+        colors = {
+            PROCESS_TREE_STATUS_PENDING:   {"bg": "#FFFFFF", "fg": "#000000", "text": "Pending"},       #  (예정)
+            PROCESS_TREE_STATUS_RUNNING:   {"bg": "#DCFCE7", "fg": "#000000", "text": "Running"},       #  (런중)
+            PROCESS_TREE_STATUS_COMPLETED: {"bg": "#D1D5DB", "fg": "#000000", "text": "Completed"},     #  (완료)
+            PROCESS_TREE_STATUS_STOP:      {"bg": "#D1D5DB", "fg": "#000000", "text": "Stopped"},       #  (중단)
+            PROCESS_TREE_STATUS_ERROR:     {"bg": "#D1D5DB", "fg": "#EF4444", "text": "Error"},         #  빨간 글자 (에러)
+        }
+        
+        if status not in colors:
+            return
+        
+        style = colors[status]
+        
+        # 모든 컬럼에 동일한 스타일 적용
+        for col in range(4):  # File, Status, Start, Finish
+            item.setBackground(col, QBrush(QColor(style["bg"])))
+            item.setForeground(col, QBrush(QColor(style["fg"])))
+        
+        item.setText(1, style["text"])
+
+    def process_tree_find_item_by_path(self, file_path):
+        """평면 리스트에서 파일 경로로 QTreeWidgetItem 찾기"""
+        for i in range(self.process_tree.topLevelItemCount()):
+            item = self.process_tree.topLevelItem(i)
+            if item and item.data(0, Qt.UserRole) == file_path:
+                return item
+        return None
+
+    def process_tree_execute_openfast(self, item, file_path):
+        """OpenFAST 프로세스 실행 및 완료 콜백 (트리거링) 설정"""
+        proc = QProcess(self)
+        self.process_tree_process_map[file_path] = proc
+        
+        # 💡 기존 원본 코드의 OpenFAST 경로 탐색 방식 적용
+        settings = QSettings("JHLEE", "OFA")
+        openfast_exe = settings.value("OpenFastExe", "")
+
+        if not openfast_exe or not os.path.exists(openfast_exe):
+            default_paths = [
+                r"C:\OpenFAST\openfast.exe",
+                r"C:\Program Files\OpenFAST\openfast.exe",
+                r"C:\Users\jeong\Downloads\BU_openFAST\OpenFAST.exe",  # 사용자 환경 경로 포용
+            ]
+            for p in default_paths:
+                if os.path.exists(p):
+                    openfast_exe = p
+                    break
+
+        if not openfast_exe or not os.path.exists(openfast_exe):
+            QMessageBox.critical(self, "OpenFAST 없음", "OpenFAST 실행 파일을 찾을 수 없습니다.")
+            self.process_tree_handle_process_finished(item, file_path, 1)
+            return
+        
+        try:
+            # QProcess 설정 및 실행
+            proc.setProgram(openfast_exe)
+            proc.setArguments([file_path])
+            proc.setWorkingDirectory(os.path.dirname(file_path))
+            
+            # Openfast 실행중 콜백 연결 (실행에 따른 트리거링) 및 실행완료 시 트리거링
+            proc.readyReadStandardOutput.connect(
+                lambda: self.process_tree_stream_output(proc, file_path)
+            )
+            proc.finished.connect(
+                lambda exit_code, exit_status, it=item, fp=file_path:
+                self.process_tree_handle_process_finished(it, fp, exit_code)
+            )
+            
+            proc.start()
+            print(f"🚀 OpenFAST 프로세스 시작: {file_path}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "실행 오류", f"OpenFAST 실행 실패:\n{str(e)}")
+            self.process_tree_handle_process_finished(item, file_path, 1)
+
+    def process_tree_handle_process_finished(self, item, file_path, exit_code):
+        """OpenFAST 실행 완료 콜백"""
+        # 💡 [수정] UI 객체가 이미 삭제되었다면 아무 작업도 하지 않고 즉시 종료
+        if not self or not hasattr(self, 'process_tree') or not self.process_tree:
+            print(f"⚠️ [Warning] UI has been destroyed. Skipping process finish handling for {os.path.basename(file_path)}.")
+            return
+
+        # 큐에서 런중 제거
+        if file_path in self.process_tree_run_queue["running"]:
+            self.process_tree_run_queue["running"].remove(file_path)
+
+        # 해당 file_path에 대한 QProcess 객체를 process_tree_process_map에서 제거
+        if file_path in self.process_tree_process_map:
+            del self.process_tree_process_map[file_path]
+
+        # 런중 → 런완료로 이동
+        current_item_in_tree = self.process_tree_find_item_by_path(file_path)
+        if current_item_in_tree: # 아이템이 아직 트리에 있다면 업데이트
+            success = (exit_code == 0)
+            self.process_tree_move_to_completed(current_item_in_tree, file_path, 
+                                                PROCESS_TREE_STATUS_COMPLETED if success else PROCESS_TREE_STATUS_ERROR,
+                                                is_error=not success)
+        else: # 아이템이 이미 트리에 없다면 (사용자가 삭제했을 가능성) 로그만 업데이트
+            print(f"⚠️ [Warning] Process finished for {os.path.basename(file_path)}, but its UI item was already removed.")
+            if file_path in self.process_logs:
+                self.process_logs[file_path] += f"\n✅ [Finished] Process End (UI item removed by user): {os.path.basename(file_path)}\n"
+        
+        # 실행 가능한 다음 항목 시작
+        self.process_tree_try_start_next()
+
+    def process_tree_stream_output(self, proc, file_path):
+        """OpenFAST 로그 스트리밑 + 진행률 파싱 → Finish 컬럼에 % 표시"""
+        # print(f"📡 [Streaming] OpenFAST 로그 수신 중: {file_path}")
+        try:
+            data = proc.readAllStandardOutput().data().decode('utf-8', errors='ignore')
+            if data:
+                # 1. 로그 누적
+                if not hasattr(self, 'process_logs'):
+                    self.process_logs = {}
+                if file_path not in self.process_logs:
+                    self.process_logs[file_path] = ""
+                self.process_logs[file_path] += data
+
+                # 2. 진행률 파싱 후 Finish 컬럼에 표시
+                match = PROGRESS_RE.search(data)
+                if match:
+                    current_sec = int(match.group(1))
+                    total_sec = int(match.group(2))
+                    
+                    
+                    item = self.process_tree_find_item_by_path(file_path) # Check item existence
+                    if item and total_sec > 0: # Only update if item exists and total_sec is valid
+                        progress_pct = int((current_sec / total_sec) * 100)
+                        # 아이템 찾아서 컬럼 3 (Finish) 에 진행률 표시
+                        item = self.process_tree_find_item_by_path(file_path)
+                        if item and item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_RUNNING:
+                            item.setText(3, f"{progress_pct}%")  # 👈 진행률 표시
+
+                # 3. 선택된 파일 로그만 cmd_output에 출력
+                if (hasattr(self, 'cmd_output') and 
+                    getattr(self, 'current_viewing_path', '') == file_path):
+                    self.cmd_output.append(data)
+                    self.cmd_output.moveCursor(QtGui.QTextCursor.End)
+
+        except Exception as e:
+            print(f"❌ 로그 스트리밍 중 예외 발생: {e}")
+
+    def process_tree_on_item_clicked(self, index):
+        """클릭 시 해당 파일의 누적 로그 표시 (자동 스크롤 맨 아래)"""
+        print(f"process_tree_on_item_clicked(index) 호출됨: index={index.row()}")
+
+        item = self.process_tree.itemFromIndex(index)
+        if not item:
+            return
+            
+        file_path = item.data(0, Qt.UserRole)
+        if not file_path:
+            return
+            
+        self.current_viewing_path = file_path
+        
+        if hasattr(self, 'cmd_output') and hasattr(self, 'process_logs'):
+            self.cmd_output.clear()
+            log_text = self.process_logs.get(file_path, "아직 생성된 로그가 없습니다.\n")
+            self.cmd_output.setPlainText(log_text)
+            self.cmd_output.moveCursor(QtGui.QTextCursor.End)  # 👈 맨 아래로 스크롤
+
+    def process_tree_on_item_selection_changed(self):
+        """평면 리스트에서 선택 변경 시 버튼 동작 전환 + Bold 처리"""
+        print("process_tree_on_item_selection_changed() 호출됨")
+
+        selected_items = self.process_tree.selectedItems()
+        
+        # 모든 아이템 폰트 일관 처리: 선택 = Bold / 비선택 = Normal
+        font_bold = self.process_tree.font()
+        font_bold.setBold(True)
+        font_normal = self.process_tree.font()
+        font_normal.setBold(False)
+        
+        # 모든 아이템 순회 → 선택된 것만 Bold
+        for i in range(self.process_tree.topLevelItemCount()):
+            item = self.process_tree.topLevelItem(i)
+            if item:
+                is_selected = item.isSelected()
+                for col in range(item.columnCount()):
+                    # 선택된 아이템 → Bold 폰트, 비선택 아이템 → Normal 폰트 (Bold 해제)
+                    item.setFont(col, font_bold if is_selected else font_normal)
+
+                item_status = item.data(1, Qt.UserRole)
+                self.process_tree_apply_status_style(item, item_status)
+        
+        # 버튼 전환 로직
+        if not selected_items:
+            print("[Process Tree] 선택된 항목이 없습니다. 버튼 상태 초기화.")
+            self.process_tree_reset_buttons()
+            return
+        
+        first_item = selected_items[0]
+        item_status = first_item.data(1, Qt.UserRole)
+        
+        # 상태가 다른 아이템이 섞여 있으면 선택 해제 (방지)
+        for item in selected_items:
+            if item.data(1, Qt.UserRole) != item_status:
+                item.setSelected(False)
+        
+        # 버튼 전환
+        if item_status == PROCESS_TREE_STATUS_RUNNING:
+            self.process_tree_set_stop_button_active()
+            print("process_tree_set_stop_button_active() 호출됨")
+        else:
+            self.process_tree_set_remove_button_active(item_status)
+            print("process_tree_set_remove_button_active() 호출됨")
+
+    def process_tree_set_stop_button_active(self):
+        """Stop 버튼으로 전환 (런중 아이템 선택 시)"""
+        self.btn_left_stop.setText("🛑 Stop")
+        self.btn_left_stop.setEnabled(True)
+        self.btn_left_stop.setEnabled(True) # Enable the button
+        try:
+            self.btn_left_stop.clicked.disconnect() # Disconnect any previous connections
+        except RuntimeError: # Catch if no slot was connected
+            pass
+        self.btn_left_stop.clicked.connect(self.process_tree_handle_stop_clicked)
+
+    def process_tree_set_remove_button_active(self, status):
+        """Remove 버튼으로 전환 (running/completed/stop 아이템 선택 시)"""
+        self.btn_left_stop.setText("🗑️ Remove")
+        self.btn_left_stop.setEnabled(True)
+        try:
+            self.btn_left_stop.clicked.disconnect()
+        except RuntimeError:
+            pass
+        self.btn_left_stop.clicked.connect(lambda: self.process_tree_handle_remove_clicked(status)) # noqa
+
+    def process_tree_reset_buttons(self):
+        """단추 원래 상태로 리셋"""
+        self.btn_left_stop.setText("🛑 Stop")
+        self.btn_left_stop.setEnabled(False)
+        try:
+            self.btn_left_stop.clicked.disconnect()
+        except RuntimeError:
+            pass
+
+    def process_tree_handle_stop_clicked(self):
+        """런중 아이템 선택 → Stop 버튼 → 3단계 강제 종료"""
+        selected = [it for it in self.process_tree.selectedItems() 
+                    if it.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_RUNNING]
+        
+        if not selected:
+            return
+        
+        reply = QMessageBox.question(
+            self, "실행 중단",
+            f"선택한 {len(selected)}개의 프로세스를 중단하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.No:
+            return
+        
+        for item in selected:
+            file_path = item.data(0, Qt.UserRole)
+            proc = self.process_tree_process_map.get(file_path)
+
+            # Remove from running queue and process map immediately
+            if file_path in self.process_tree_run_queue["running"]:
+                self.process_tree_run_queue["running"].remove(file_path)
+            if file_path in self.process_tree_process_map:
+                del self.process_tree_process_map[file_path]
+
+            # Disconnect signals immediately to prevent further updates from QProcess
+            
+            if proc and proc.state() == QProcess.Running:
+                import subprocess as sp
+                
+                # 🛑 1단계: terminate (SIGTERM)
+                proc.terminate()
+                try:
+                    proc.waitForFinished(2000)
+                except:
+                    pass
+                
+                # 🛑 2단계: kill (SIGKILL)
+                if proc.state() == QProcess.Running:
+                    proc.kill()
+                    try:
+                        proc.waitForFinished(3000)
+                    except:
+                        pass
+                
+                # 🛑 3단계: system-level taskkill (자식 프로세스 포함) — ★ 핵심!
+                if proc.state() == QProcess.Running:
+                    try:
+                        pid = proc.pid()
+                        # /T: 자식 프로세스 포함, /F: 강제 종료
+                        result = sp.run(
+                            f'taskkill /F /PID {pid} /T',
+                            shell=True, capture_output=True, text=True, timeout=5
+                        )
+                        print(f"⚡ [System Kill] PID={pid}: {result.stdout.strip()}")
+                        
+                        proc.waitForFinished(1000)
+                    except Exception as e:
+                        print(f"⚠️ [System Kill 예외] {e}")
+                
+                # 🧹 4단계: 정리
+                self.process_tree_process_map.pop(file_path, None)
+                try:
+                    proc.readyReadStandardOutput.disconnect()
+                    proc.readyReadStandardError.disconnect()
+                    proc.finished.disconnect()
+                except RuntimeError:
+                    pass
+
+
+                # Update process_logs to reflect termination
+                if file_path in self.process_logs:
+                    self.process_logs[file_path] += f"\n❌ [Stopped by User] Process Terminated: {os.path.basename(file_path)}\n"
+                
+                # 상태 로그
+                state = proc.state()
+                if state == QProcess.Running:
+                    # If it's still running after all attempts, mark as error
+                    self.process_tree_move_to_completed(item, file_path, PROCESS_TREE_STATUS_ERROR, is_error=True)
+                    if file_path in self.process_tree_run_queue["running"]:
+                        self.process_tree_run_queue["running"].remove(file_path)
+                    print(f"❌ [Stop] 종료 실패: {os.path.basename(file_path)} (PID: {proc.pid()})")
+                else:
+                    print(f"✅ [Stop] 종료 성공: {os.path.basename(file_path)}")
+            
+            # UI 상태 변경
+            self.process_tree_move_to_completed(item, file_path, PROCESS_TREE_STATUS_STOP, True)
+            self.process_tree_set_remove_button_active(PROCESS_TREE_STATUS_STOP)
+            # Remove from running queue
+            if file_path in self.process_tree_run_queue["running"]:
+                self.process_tree_run_queue["running"].remove(file_path)
+        
+        # 다음 런예정 시작
+        self.process_tree_try_start_next()
+
+    def process_tree_handle_remove_clicked(self, status):
+        """런예정/런완료/Stop 아이템 선택 → Remove 버튼 → 리스트에서 제거"""
+        selected = [it for it in self.process_tree.selectedItems()
+                    if it.data(1, Qt.UserRole) == status or (status in [PROCESS_TREE_STATUS_COMPLETED, PROCESS_TREE_STATUS_STOP, PROCESS_TREE_STATUS_ERROR] and it.data(1, Qt.UserRole) in [PROCESS_TREE_STATUS_COMPLETED, PROCESS_TREE_STATUS_STOP, PROCESS_TREE_STATUS_ERROR])]
+        
+        # Use a copy of the list to iterate over, as we'll be modifying the original
+        items_to_remove = list(selected)
+
+        for item in items_to_remove:
+            file_path = item.data(0, Qt.UserRole)
+
+            # If a running process is being removed, terminate it and disconnect signals
+            if item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_RUNNING:
+                proc = self.process_tree_process_map.get(file_path)
+                if proc and proc.state() == QProcess.Running:
+                    print(f"⚠️ [Warning] Removing running process {os.path.basename(file_path)}. Terminating it.")
+                    try:
+                        proc.readyReadStandardOutput.disconnect()
+                        proc.readyReadStandardError.disconnect()
+                        proc.finished.disconnect()
+                    except RuntimeError:
+                        pass
+                    proc.terminate()
+                    proc.waitForFinished(1000)
+                    if proc.state() == QProcess.Running:
+                        proc.kill()
+                        proc.waitForFinished(1000)
+                    if proc.state() == QProcess.Running:
+                        try:
+                            pid = proc.pid()
+                            subprocess.run(
+                                f'taskkill /F /PID {pid} /T',
+                                shell=True, capture_output=True, text=True, timeout=5,
+                                creationflags=subprocess.CREATE_NO_WINDOW
+                            )
+                            print(f"⚡ [System Kill] PID={pid} for removed item.")
+                        except Exception as e:
+                            print(f"⚠️ [System Kill Exception] for removed item: {e}")
+                
+                # Remove from process map and running queue
+                if file_path in self.process_tree_process_map:
+                    del self.process_tree_process_map[file_path]
+                if file_path in self.process_tree_run_queue["running"]:
+                    self.process_tree_run_queue["running"].remove(file_path)
+
+            # 큐에서도 제거
+            queue_key = {PROCESS_TREE_STATUS_PENDING: "pending", 
+                         PROCESS_TREE_STATUS_COMPLETED: "completed",
+                         PROCESS_TREE_STATUS_STOP: "completed",
+                         PROCESS_TREE_STATUS_ERROR: "completed"}.get(item.data(1, Qt.UserRole))
+            if queue_key and file_path in self.process_tree_run_queue[queue_key]:
+                self.process_tree_run_queue[queue_key].remove(file_path)
+            
+            # 👇 flat view용: topLevelItem 직접 제거
+            row = self.process_tree.indexOfTopLevelItem(item)
+            if row != -1:
+                self.process_tree.takeTopLevelItem(row) # This deletes the QTreeWidgetItem
+
+        # After removal, update button states and try to start next pending process
+        self.process_tree_on_item_selection_changed() # Re-evaluate button states
+        self.process_tree_try_start_next()
+
+        
+
+    def get_current_working_dir(self):
+        """현재 작업 디렉토리 반환 (마지막 .fst 경로 기반)"""
+        if self.process_tree_run_queue["pending"]:
+            return os.path.dirname(self.process_tree_run_queue["pending"][0])
+        settings = QSettings("JHLEE", "OFA")
+        last_fst = settings.value("LastFstPath_fst", "")
+        return os.path.dirname(last_fst) if last_fst else os.getcwd()
+
+    def process_tree_adjust_run_count(self, event=None):
+        """최대 동시 실행 개수 조절 (ProcessQueueManager에 위임)"""
+        new_count = self.queue_mgr.adjust_max_concurrent(self, self.queue_mgr.queue.max_concurrent)
+        if new_count is not None and hasattr(self, 'cmd_output'):
+            self.cmd_output.append(f"⚙️ 최대 동시 실행 개수: {new_count}로 설정됨\n")
+
+    def cleanup_processes(self):
+        """애플리케이션 종료 시 모든 실행 중인 QProcess를 정리합니다."""
+        print("[Cleanup] 모든 실행 중인 프로세스를 종료합니다...")
+        
+        # process_tree_process_map의 복사본을 만들어 순회 (원본 딕셔너리 변경에 따른 문제 방지)
+        for file_path, proc in list(self.process_tree_process_map.items()):
+            if proc and proc.state() == QProcess.Running:
+                try:
+                    # 시그널 연결 해제 (메모리 누수 및 충돌 방지)
+                    proc.readyReadStandardOutput.disconnect()
+                    proc.finished.disconnect()
+                except RuntimeError:
+                    pass # 이미 연결이 끊어진 경우
+                proc.kill()  # 프로세스 강제 종료
+                proc.waitForFinished(1000) # 1초 대기
+                print(f"  -> 🛑 종료: {os.path.basename(file_path)}")
+        self.process_tree_process_map.clear()
+
+
+    def process_tree_move_selected_up(self):
+        """Shift + ↑ : 런예정 리스트 내 선택항목 위로 이동"""
+        selected_items = self.process_tree.selectedItems()
+        if not selected_items:
+            return
+
+        # PENDING 상태인 항목만 필터링
+        pending_items = [it for it in selected_items if it.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING]
+        if not pending_items:
+            return
+
+        # 올바른 순서로 이동하기 위해 행 번호 기준으로 정렬
+        pending_items.sort(key=lambda item: self.process_tree.indexOfTopLevelItem(item))
+
+        for item in pending_items:
+            row = self.process_tree.indexOfTopLevelItem(item)
+            if row > 0:
+                # 바로 위 아이템이 PENDING 상태가 아니면 이동하지 않음
+                above_item = self.process_tree.topLevelItem(row - 1)
+                if above_item and above_item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING:
+                    self.process_tree.takeTopLevelItem(row)
+                    self.process_tree.insertTopLevelItem(row - 1, item)
+                    item.setSelected(True)
+
+        # 큐 순서도 동기화
+        self.process_tree_resync_pending_queue()
+
+    def process_tree_move_selected_down(self):
+        """Shift + ↓ : 런예정 리스트 내 선택항목 아래로 이동"""
+        selected_items = self.process_tree.selectedItems()
+        if not selected_items:
+            return
+
+        pending_items = [it for it in selected_items if it.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING]
+        if not pending_items:
+            return
+
+        # 아래에서 위로 순서로 정렬해야 인덱스가 꼬이지 않음
+        pending_items.sort(key=lambda item: self.process_tree.indexOfTopLevelItem(item), reverse=True)
+
+        for item in pending_items:
+            row = self.process_tree.indexOfTopLevelItem(item)
+            # 마지막 아이템이 아니어야 함
+            if row < self.process_tree.topLevelItemCount() - 1:
+                below_item = self.process_tree.topLevelItem(row + 1)
+                if below_item and below_item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING:
+                    self.process_tree.takeTopLevelItem(row)
+                    self.process_tree.insertTopLevelItem(row + 1, item)
+                    item.setSelected(True)
+
+        self.process_tree_resync_pending_queue()
+
+    def process_tree_resync_pending_queue(self):
+        """UI 순서를 큐 데이터와 동기화"""
+        self.process_tree_run_queue["pending"] = [
+            self.process_tree.topLevelItem(i).data(0, Qt.UserRole)
+            for i in range(self.process_tree.topLevelItemCount())
+            if self.process_tree.topLevelItem(i).data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING
+        ]
+
+    def keyPressEvent(self, event):
+        if event.modifiers() & Qt.ShiftModifier:
+            if event.key() == Qt.Key_Up:
+                self.process_tree_move_selected_up()
+                return
+            elif event.key() == Qt.Key_Down:
+                self.process_tree_move_selected_down()
+                return
+        super().keyPressEvent(event)
+
+    def process_tree_save_run_queue(self):
+        """실행 큐 상태를 .ofa_run_queue.json으로 저장"""
+        queue_data = {
+            "pending": self.process_tree_run_queue["pending"],
+            "running": self.process_tree_run_queue["running"],
+            "completed": self.process_tree_run_queue["completed"],
+            "max_concurrent": self.process_tree_max_concurrent,
+            "timestamp": datetime.now().isoformat(),
+        }
+        
+        save_path = os.path.join(self.get_current_working_dir(), ".ofa_run_queue.json")
+        try:
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(queue_data, f, indent=2)
+            # cmd_output에 저장 완료 메시지
+            if hasattr(self, 'cmd_output'):
+                self.cmd_output.append(f"💾 실행 큐 상태 저장: {save_path}\n")
+        except Exception as e:
+            print(f"❌ 큐 저장 실패: {e}")
+
+    def process_tree_load_run_queue(self):
+        """저장된 실행 큐 상태 복구 (사용자 확인 후)"""
+        save_path = os.path.join(self.get_current_working_dir(), ".ofa_run_queue.json")
+        if not os.path.exists(save_path):
+            return
+        
+        # 파일 수정 시간 확인
+        mtime = datetime.fromtimestamp(os.path.getmtime(save_path))
+        
+        reply = QMessageBox.question(
+            self, "실행 상태 복구",
+            f"이전 실행 상태가 발견되었습니다.\n\n"
+            f"저장 시간: {mtime.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"복구하시겠습니까?\n\n"
+            f"(이미 완료된 작업은 런완료로, 진행 중이던 작업은 런예정으로 복구됩니다.)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        
+        if reply == QMessageBox.No:
+            return
+        
+        try:
+            with open(save_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            self.process_tree_restore_queue(data)
+            if hasattr(self, 'cmd_output'):
+                self.cmd_output.append("🔄 실행 큐 상태 복구 완료\n")
+        except Exception as e:
+            QMessageBox.warning(self, "복구 실패", f"실행 상태 복구 중 오류:\n{e}")
+
+    def process_tree_restore_queue(self, data):
+        """복구된 데이터로 큐와 UI 재구성"""
+        # 기존 트리 비우기
+        self.process_tree.clear()
+        
+        # 큐 복원
+        self.process_tree_run_queue = {
+            "pending": data.get("pending", []),
+            "running": data.get("running", []),   # 재시작 시에는 모두 런예정으로 처리
+            "completed": data.get("completed", []),
+        }
+        self.process_tree_max_concurrent = data.get("max_concurrent", 3)
+        
+        # 런중 → 런예정으로 이동 (재시작 시)
+        restored_running = self.process_tree_run_queue["running"]
+        self.process_tree_run_queue["pending"] = restored_running + self.process_tree_run_queue["pending"]
+        self.process_tree_run_queue["running"] = []
+        
+        # UI 재구성
+        # 1. 런예정 항목 추가
+        for fp in self.process_tree_run_queue["pending"]:
+            self.process_tree_add_to_pending(fp)
+
+        # 2. 런완료/에러/중단 항목 복원
+        for completed_info in self.process_tree_run_queue.get("completed", []):
+            path = completed_info.get("path")
+            success = completed_info.get("success")
+            status = PROCESS_TREE_STATUS_COMPLETED if success else PROCESS_TREE_STATUS_ERROR
+            item = QTreeWidgetItem([os.path.basename(path), "", "", ""])
+            item.setData(0, Qt.UserRole, path)
+            self.process_tree_move_to_completed(item, path, status, is_error=not success)
+            self.process_tree.addTopLevelItem(item)
+
+#-------------------------------------------------------------------
+
+    def _on_queue_item_added(self, item):
+        """큐에 새 아이템 추가 시 UI 트리에 추가"""
+        qt_item = QTreeWidgetItem([os.path.basename(item.path), "Pending", "", ""])
+        qt_item.setData(0, Qt.UserRole, item.path)
+        qt_item.setData(1, Qt.UserRole, item.status)
+        self._apply_status_style(qt_item, item.status)
+        self.process_tree.addTopLevelItem(qt_item)
+        item.qt_item = qt_item
+
+    def _on_queue_item_updated(self, item):
+        """큐 아이템 상태 변경 시 UI 업데이트"""
+        qt_item = getattr(item, 'qt_item', None)
+        if qt_item:
+            self._apply_status_style(qt_item, item.status)
+            if item.start_time:
+                qt_item.setText(2, item.start_time)
+            if item.end_time:
+                qt_item.setText(3, item.end_time)
+
+    def _on_queue_item_removed(self, item):
+        """큐에서 아이템 제거 시 UI에서 제거"""
+        qt_item = getattr(item, 'qt_item', None)
+        if qt_item:
+            row = self.process_tree.indexOfTopLevelItem(qt_item)
+            if row != -1:
+                self.process_tree.takeTopLevelItem(row)
+
+    def _on_queue_log_received(self, file_path: str, data: str):
+        """로그 수신 시 process_logs 업데이트"""
+        if not hasattr(self, 'process_logs'):
+            self.process_logs = {}
+        if file_path not in self.process_logs:
+            self.process_logs[file_path] = ""
+        self.process_logs[file_path] += data
+        
+        if getattr(self, 'current_viewing_path', '') == file_path:
+            if hasattr(self, 'cmd_output'):
+                self.cmd_output.append(data)
+                self.cmd_output.moveCursor(QtGui.QTextCursor.End)
+
+    def _on_queue_progress_updated(self, file_path: str, percent: int):
+        """진행률 업데이트 시 Finish 컬럼에 표시"""
+        item = self._find_qt_item_by_path(file_path)
+        if item and item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_RUNNING:
+            item.setText(3, f"{percent}%")
+
+    def _on_queue_buttons_update(self):
+        """버튼 상태 업데이트 요청"""
+        if hasattr(self, 'process_tree_on_item_selection_changed'):
+            self.process_tree_on_item_selection_changed()
+
+    def _find_qt_item_by_path(self, file_path: str):
+        """경로로 QTreeWidgetItem 찾기"""
+        for i in range(self.process_tree.topLevelItemCount()):
+            item = self.process_tree.topLevelItem(i)
+            if item and item.data(0, Qt.UserRole) == file_path:
+                return item
+        return None
+
+    def _apply_status_style(self, item, status):
+        """아이템에 상태별 스타일 적용"""
+        status_map = {
+            0: {"bg": "#FFFFFF", "fg": "#000000", "text": "Pending"},
+            1: {"bg": "#DCFCE7", "fg": "#000000", "text": "Running"},
+            2: {"bg": "#D1D5DB", "fg": "#000000", "text": "Completed"},
+            3: {"bg": "#D1D5DB", "fg": "#000000", "text": "Stopped"},
+            4: {"bg": "#D1D5DB", "fg": "#EF4444", "text": "Error"},
+        }
+        style = status_map.get(status)
+        if not style:
+            return
+        for col in range(4):
+            item.setBackground(col, QBrush(QColor(style["bg"])))
+            item.setForeground(col, QBrush(QColor(style["fg"])))
+        item.setText(1, style["text"])
+
+#-------------------------------------------------------------------
 
 
 

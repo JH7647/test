@@ -211,20 +211,20 @@ class PlotTab(QWidget):
             if not fst_path or not os.path.exists(fst_path):
                 return  # .fst 파일 경로가 비어있거나 실제 존재하지 않으면 통과
 
-            print(f"[AutoLoad] 시뮬레이션 결과 로드: fst_path = {fst_path}")    
+#            print(f"[AutoLoad] 시뮬레이션 결과 로드: fst_path = {fst_path}")    
             # 2. .fst 파일 이름의 확장자를 떼고 .out 또는 .txt 경로 조합
             base_path, _ = os.path.splitext(fst_path)
             out_candidate = base_path + ".out"
             txt_candidate = base_path + ".txt"
 
-            print(f"[AutoLoad] 시뮬레이션 결과 로드: base_path = {out_candidate}")
+#            print(f"[AutoLoad] 시뮬레이션 결과 로드: base_path = {out_candidate}")
             
             # 3. .out 파일이 먼저 있는지 보고, 없으면 .txt 파일 확인 후 자동 로드
             if os.path.exists(out_candidate):
-                print(f"[AutoLoad] 시뮬레이션 결과 로드: out_candidate = {out_candidate}")
+#                print(f"[AutoLoad] 시뮬레이션 결과 로드: out_candidate = {out_candidate}")
                 self.load_output_data(out_candidate)
             elif os.path.exists(txt_candidate):
-                print(f"[AutoLoad] 시뮬레이션 결과 로드: txt_candidate = {txt_candidate}")
+#                print(f"[AutoLoad] 시뮬레이션 결과 로드: txt_candidate = {txt_candidate}")
                 self.load_output_data(txt_candidate)
                 
         except Exception as e:
@@ -310,7 +310,7 @@ class PlotTab(QWidget):
 
     def load_output_data(self, file_path):
         "데이터 파싱 및 로드"
-        print(f"load_output_data() file_path: {file_path}")
+    #    print(f"load_output_data() file_path: {file_path}")
         
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
