@@ -395,11 +395,11 @@ class MainTab(QWidget):
             or OpenFastIO.current_config.get("EDFile", {}).get("default", "")
         )
         if not main_fst or not ed_name:
-            return {key: "0" for key in self.INITIAL_CONDITIONS}
+            return {key: {"value": "0"} for key in self.INITIAL_CONDITIONS}
 
         ed_path = OpenFastIO.get_absolute_path(main_fst, ed_name)
         if not os.path.exists(ed_path):
-            return {key: "0" for key in self.INITIAL_CONDITIONS}
+            return {key: {"value": "0"} for key in self.INITIAL_CONDITIONS}
 
         result = {key: {"value": "0"} for key in self.INITIAL_CONDITIONS}
         try:

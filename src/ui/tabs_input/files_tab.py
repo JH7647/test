@@ -65,7 +65,7 @@ class FilesTab(QWidget):
 
         main_layout.addWidget(self.main_splitter)
 
-# [LEFT SIDE] 세로 Splitter로 분할 =====================================================================================
+# region : [LEFT SIDE] 세로 Splitter로 분할 ============================================================
         left_vsplitter = QSplitter(Qt.Vertical)
 
         # 상단: 디렉토리 버튼 + 파일 트리
@@ -79,7 +79,6 @@ class FilesTab(QWidget):
         left_bottom_layout = QVBoxLayout(left_bottom_widget)
         left_bottom_layout.setContentsMargins(0, 0, 0, 0)
         left_bottom_layout.setSpacing(5)
-        # ========================================
         
         # --- 좌측 상단 패널을 다시 좌우로 분할 ---
         left_top_splitter = QSplitter(Qt.Horizontal)
@@ -131,9 +130,6 @@ class FilesTab(QWidget):
         
         filter_layout.addStretch()
         fst_list_layout.addLayout(filter_layout)
-
-        settings = QSettings("JHLEE", "OFA")
-        last_fst_path = settings.value("LastFstPath_fst", "")
         
         self.dir_tree = QTreeView()  
         self.dir_tree.setHeaderHidden(True)
@@ -142,8 +138,8 @@ class FilesTab(QWidget):
         self.dir_tree.setExpandsOnDoubleClick(False)
         self.dir_tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.dir_tree.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.dir_tree_model = QStandardItemModel()   # 새 모델 바인딩
-        self.dir_tree.setModel(self.dir_tree_model) # 새 모델 바인딩       
+        self.dir_tree_model = QStandardItemModel()   
+        self.dir_tree.setModel(self.dir_tree_model)        
         self.dir_tree.setStyleSheet("""
             QTreeView { 
                 border: 1px solid #E5E7EB; 
@@ -176,13 +172,6 @@ class FilesTab(QWidget):
 
         left_top_splitter.setSizes([250, 300])
         left_top_layout.addWidget(left_top_splitter)
-
-        if last_fst_path and os.path.exists(last_fst_path):
-            self.dir_tree_update(last_fst_path)
-            # 초기 경로 설정
-            dir_path = os.path.dirname(last_fst_path)
-            self.dir_explorer_tree.setCurrentIndex(self.dir_model.index(dir_path))
-            self.dir_explorer_tree.scrollTo(self.dir_model.index(dir_path), QAbstractItemView.PositionAtTop)
 
         # 3. Process list 표시 영역 (라벨 및 Run, Stop 버튼 한 행 구성)
         process_header_layout = QHBoxLayout()
@@ -323,15 +312,7 @@ class FilesTab(QWidget):
         right_bottom_layout.setContentsMargins(0, 0, 0, 0)
         right_bottom_layout.setSpacing(5)
 
-        # 1. 상단: .fst 파일 path 정보 및 세부 연동 파일 표시 트리뷰
-        current_fst_path = ""
-        display_fst_path = ""
-
-        if last_fst_path and os.path.exists(last_fst_path):
-            current_fst_path = last_fst_path
-            display_fst_path = self.shrink_directory_path(current_fst_path, max_len=100)
-
-        # 2. OpenFAST 모델 구성 정보 표시 트리뷰   
+        # OpenFAST 모델 구성 정보 표시 트리뷰   
         self.model_tree = QTreeView()
         self.model_tree.setHeaderHidden(True)
         self.model_tree.setRootIsDecorated(True)   
@@ -367,10 +348,7 @@ class FilesTab(QWidget):
 
         right_top_layout.addWidget(self.model_tree, stretch=402)
 
-        if current_fst_path and os.path.exists(current_fst_path):
-            self.model_tree_update(current_fst_path)
-
-        # 3. CMD Result 표시 영역
+        # CMD Result 표시 영역
         process_result_header_layout = QHBoxLayout() # 좌측 process_header_layout의 (4, 10, 0, 2)와 똑같이 상단 여백(10px)을 주어 완벽하게 수평을 맞춥니다.
         process_result_header_layout.setContentsMargins(4, 16, 0, 6)
         process_result_header_layout.setSpacing(0)
@@ -381,7 +359,6 @@ class FilesTab(QWidget):
         
         right_bottom_layout.addLayout(process_result_header_layout)
 
-        # cmd 로그 출력 창 (`QTextEdit`)
         self.cmd_output = QTextEdit()
         self.cmd_output.setReadOnly(True)
         self.cmd_output.setStyleSheet("""
@@ -413,6 +390,7 @@ class FilesTab(QWidget):
         """ Files 탭에 진입할 때마다 UI를 새로고침합니다. """
         settings = QSettings("JHLEE", "OFA")
         last_fst_path = settings.value("LastFstPath_fst", "")
+
         if last_fst_path and os.path.exists(last_fst_path):
             self.displayed_files = [last_fst_path]  
             self.dir_tree_update(last_fst_path)
@@ -425,18 +403,7 @@ class FilesTab(QWidget):
                     self.dir_explorer_tree.setCurrentIndex(index)
                     self.dir_explorer_tree.scrollTo(index, QAbstractItemView.PositionAtTop)
 
-    # def on_dir_explorer_selected(self, selected, deselected):
-    #     """디렉토리 탐색기에서 디렉토리 선택 시 .fst 목록 업데이트"""
-    #     indexes = selected.indexes()
-    #     if not indexes:
-    #         return
-        
-    #     index = indexes[0]
-    #     dir_path = self.dir_model.filePath(index)
-        
-    #     if dir_path:
-    #         # .fst 파일 목록을 업데이트합니다.
-    #         self.dir_tree_update(dir_path)
+            print(f"[DEBUG] on_tab_enter: last_fst_path={last_fst_path}, displayed_files={self.displayed_files}")
 
     def on_dir_explorer_selected(self, selected, deselected):
         """디렉토리 탐색기에서 디렉토리 선택 시 .fst 목록 업데이트"""
@@ -449,7 +416,6 @@ class FilesTab(QWidget):
         print(f"[DEBUG] Explorer selected: dir_path={dir_path}")  # ← 이 줄 추가
         
         if dir_path:
-            # .fst 파일 목록을 업데이트합니다.
             self.dir_tree_update(dir_path)
 
     def dir_tree_drag_enter_event(self, event):
@@ -502,19 +468,9 @@ class FilesTab(QWidget):
         else:
             print(f"⚠️ 파일 경로 유효성 검증 실패 또는 실재하지 않음: {file_path}")
 
-
     def dir_tree_clicked(self, event):
         """ 좌측 디렉토리 트리뷰에서 마우스 물리 누름(Press) 이벤트를 가로채어 처리 """
-    # # line 502-508 부근
-    # if not index.isValid():
-    #     print("[DEBUG] index is invalid")
-    #     return
-        
-    # item = self.dir_tree_model.itemFromIndex(index)
-    # if item:
-    #     clicked_file_path = item.data(Qt.UserRole)
-    #     print(f"[DEBUG] clicked: {clicked_file_path}, exists={os.path.exists(clicked_file_path) if clicked_file_path else 'None'}")
-        
+          
         # 0. 어떤 특수키(Modifier)가 함께 눌렸는지 확인
         # modifiers = event.modifiers()
         modifiers = QApplication.keyboardModifiers()
@@ -523,7 +479,6 @@ class FilesTab(QWidget):
         index = self.dir_tree.indexAt(event.pos())
 
         # 2. QTreeView 본연의 선택 및 하이라이트 모션을 유지하기 위해 부모 이벤트 호출
-        from PySide6.QtWidgets import QTreeView
         QTreeView.mousePressEvent(self.dir_tree, event)
 
         # 빈 여백이 아닌 실제 파일 항목을 정확히 찍었을 때만 진입
@@ -564,12 +519,16 @@ class FilesTab(QWidget):
                 
                 # 그냥 클릭한 경우 (Ctrl 없이 일반 클릭)
                 else:
-                    print(f"⚡ [Single Click] 기존 파일 초기화 후 단독 표시 -> {clicked_file_path}")
                     self.displayed_files = [clicked_file_path]
 
-                # ---------------------------------------------------------------
-                # 🎨 [UI 렌더링] 리스트(self.displayed_files)에 포함된 파일들 하이라이트
-                # ---------------------------------------------------------------
+                   # OpenFastIO 저장, Settings 레지스트리에도 동기화
+                    OpenFastIO.current_config.setdefault("MainFST", {})["current"] = clicked_file_path
+                    settings = QSettings("JHLEE", "OFA")
+                    settings.setValue("LastFstPath_fst", clicked_file_path)
+
+                    print(f" OpenFastIO.current_config.set = {OpenFastIO.current_config.get('MainFST', {}).get('current')}")
+
+                # 리스트(self.displayed_files)에 포함된 파일들 하이라이트
                 for row in range(self.dir_tree_model.rowCount()):
                     loop_item = self.dir_tree_model.item(row)
                     if not loop_item:
@@ -592,18 +551,15 @@ class FilesTab(QWidget):
                         font.setBold(False)
                         loop_item.setFont(font)
 
-                # 3. 최신 세션 경로 변수 동기화 (가장 마지막에 선택된 타겟 보존)
-                self.last_fst_path = clicked_file_path
+                # # 3. 최신 세션 경로 변수 동기화 (가장 마지막에 선택된 타겟 보존)
+                # self.last_fst_path = clicked_file_path
                 
                 # 🎯 [우측 화면 동기화] model_tree에 최종 결정된 리스트 전달하여 업데이트 실행
                 if hasattr(self, 'model_tree_update'):
-                    # 💡 힌트: 복수 파일을 받아서 처리할 수 있도록 리스트 자체를 넘겨주거나, 
-                    # 호출 형태에 맞춰 model_tree_update 내부를 리스트 대응형으로 확장하여 연동하시면 가장 좋습니다.
                     self.model_tree_update(self.displayed_files)
                 
                 # 🎯 [화면 즉시 리프레시] 윈도우 OS 그래픽 엔진 즉시 렌더링 강제 집행
                 QApplication.processEvents()
-
 
     def dir_tree_update(self, last_fst_path):
         """ 지정된 폴더 내부의 파일들을 필터에 맞춰 추출하여 좌측 리스트에 바인딩합니다. """
@@ -682,8 +638,6 @@ class FilesTab(QWidget):
 
             self.dir_tree_model.appendRow(item)
 
-
-
     def on_file_filter_changed(self, state):
         """파일 필터 체크박스 변경 시 파일 리스트 즉시 갱신"""
         indexes = self.dir_explorer_tree.selectionModel().selectedIndexes()
@@ -691,29 +645,6 @@ class FilesTab(QWidget):
             dir_path = self.dir_model.filePath(indexes[0])
             if dir_path:
                 self.dir_tree_update(dir_path)
-
-
-
-    @staticmethod
-    def shrink_directory_path(path, max_len=50):
-        """ 경로가 max_len을 넘으면 중간을 '...'으로 생략하는 함수 """
-        if not path or len(path) <= max_len:
-            return path
-        
-        # OS 구분자 기준 분할 (오픈패스트 특성상 슬래시 사용)
-        parts = path.replace('\\', '/').split('/')
-        
-        # 드라이브명(앞)과 현재 폴더명(뒤) 결합
-        head = parts[0] + "/" + parts[1] if len(parts) > 1 else parts[0]
-        tail = parts[-1]
-        
-        # 글자수가 제한을 넘을 경우 중간 조합
-        shrunk = f"{head}/.../{tail}"
-        
-        # 만약 생략한 결과도 너무 길다면 단순 글자수 자르기
-        if len(shrunk) > max_len:
-            return path[:max_len-3] + "..."
-        return shrunk
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -992,7 +923,6 @@ class FilesTab(QWidget):
                 if root_index.isValid():
                     self.model_tree.setExpanded(root_index, True)             
 
-
     def model_tree_press_event(self, event):
         """ 마우스 클릭 시 클릭한 위치와 항목을 기억하는 함수 """
         if event.button() == Qt.LeftButton:
@@ -1066,7 +996,6 @@ class FilesTab(QWidget):
                 subprocess.Popen(["notepad.exe", file_path])
         else:
             QMessageBox.warning(self, "Error", "Files is not found & Please check whether the file exist.")
-
 
     def model_tree_item_right_clicked(self, pos):
    # 트리 뷰 마우스 우클릭 팝업 메뉴 화면 처리 
@@ -1200,7 +1129,6 @@ class FilesTab(QWidget):
             
             # 런예정에 추가
             self.process_tree_add_to_pending(file_path)
-
 
     def process_tree_add_to_pending(self, file_path):
         """런예정 리스트에 항목 추가 → 즉시 실행 가능 여부 확인"""
@@ -1409,7 +1337,6 @@ class FilesTab(QWidget):
 
         except Exception as e:
             print(f"❌ 로그 스트리밍 중 예외 발생: {e}")
-
 
     def process_tree_on_item_clicked(self, index):
         """클릭 시 해당 파일의 누적 로그 표시 (자동 스크롤 맨 아래)"""
@@ -1676,7 +1603,6 @@ class FilesTab(QWidget):
         last_fst = settings.value("LastFstPath_fst", "")
         return os.path.dirname(last_fst) if last_fst else os.getcwd()
 
-
     def process_tree_adjust_run_count(self, event=None):
         """최대 동시 실행 개수 조절 (ProcessQueueManager에 위임)"""
         new_count = self.queue_mgr.adjust_max_concurrent(self, self.queue_mgr.queue.max_concurrent)
@@ -1857,10 +1783,7 @@ class FilesTab(QWidget):
             self.process_tree_move_to_completed(item, path, status, is_error=not success)
             self.process_tree.addTopLevelItem(item)
 
-    def closeEvent(self, event):
-        """프로그램 종료 전 상태 저장"""
-        self.process_tree_save_run_queue()
-        event.accept()
+
 
 
 #-------------------------------------------------------------------
@@ -1945,9 +1868,6 @@ class FilesTab(QWidget):
 
 
 
-
-
-        
 
 
     def mouse_Rclick_open_directory(self, text):
@@ -2621,17 +2541,11 @@ class FilesTab(QWidget):
         self.model_tree_update(main_fst_path)
 
 
+
+
+
     def closeEvent(self, event):
         """프로그램 종료 전 상태 저장"""
         self.process_tree_save_run_queue()
-        
-        # 현재 로드된 .fst 파일 경로 저장
-        try:
-            main_fst = OpenFastIO.current_config.get("MainFST", {}).get("current")
-            if main_fst:
-                settings = QSettings("JHLEE", "OFA")
-                settings.setValue("LastFstPath_fst", main_fst)
-        except Exception:
-            pass
         
         event.accept()

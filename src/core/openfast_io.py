@@ -188,8 +188,7 @@ class OpenFastIO:
                 mod_path = cls._resolve_path(file_key, fst_path)
                 cls.current_config = cls.read_file(mod_path, cls.current_config)
 
-
-        print(f" TwrFile = {cls.current_config['TwrFile']['current']}")
+#        print(f" TwrFile = {cls.current_config['TwrFile']['current']}")
 
         return cls.current_config
 
