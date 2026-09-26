@@ -12,25 +12,19 @@ import re
 from datetime import datetime
 from logging import config
 
-from PySide6.QtWidgets import QMessageBox, QFileDialog, QDialog
-from PySide6.QtCore import QPoint, Qt,QSettings, Qt, QPoint, QSettings, QProcess
+from PySide6.QtWidgets import QMessageBox, QFileDialog, QDialog, QCheckBox
+from PySide6.QtCore import QDir, QPoint, Qt, QSettings, QProcess
 from PySide6.QtGui import QStandardItemModel, QStandardItem
-from PySide6.QtWidgets import QTextEdit, QPushButton, QHBoxLayout, QFormLayout, QSpinBox, QLineEdit, QComboBox, QTableWidget, QTableWidgetItem, QAbstractItemView
+from PySide6.QtWidgets import QTextEdit, QPushButton, QHBoxLayout, QFormLayout, QSpinBox, QLineEdit, QComboBox, QTableWidget, QTableWidgetItem, QAbstractItemView, QFileSystemModel
 from PySide6.QtGui import QColor, QBrush, QFont, QCursor,QTextCursor
-from PySide6.QtCore import QProcess, QSettings, Qt
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QTabWidget, QLabel, QTreeView, QSplitter, QTreeWidget, QTreeWidgetItem 
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox, QWidget, QVBoxLayout, QTreeView
 
-from src.core.openfast_io import OpenFastIO  # 코어 엔진 임포트
-
-# === 상태 상수 ===
-PROCESS_TREE_STATUS_PENDING = 0
-PROCESS_TREE_STATUS_RUNNING = 1
-PROCESS_TREE_STATUS_COMPLETED = 2
-PROCESS_TREE_STATUS_STOP = 3
-PROCESS_TREE_STATUS_ERROR = 4
+from src.core.openfast_io import OpenFastIO  
+from src.core.process_queue import ProcessQueueManager
 
 PROGRESS_RE = re.compile(r"Time:\s*(\d+)\s+of\s+(\d+)\s+seconds[^\r\n]*")
+
 
 class FilesTab(QWidget):
     """ 오직 파일 디렉토리 탐색과 드래그앤드롭 모션, 트리 배지만 책임지는 정석 UI 위젯 """
@@ -39,23 +33,28 @@ class FilesTab(QWidget):
         super().__init__(parent)
         self.main_window = main_window  # 상위 컨트롤러 메인 창 정보 저장 (탭 라우팅 신호용)
         self._drag_start_position = QPoint()
-        self.init_ui()
 
-        self.running_processes = []
-        self.process_logs = {}
+        # ProcessQueueManager initialized BEFORE init_ui()
+        self.queue_mgr = ProcessQueueManager(self)
+        self.queue_mgr.item_added.connect(self._on_queue_item_added)
+        self.queue_mgr.item_updated.connect(self._on_queue_item_updated)
+        self.queue_mgr.item_removed.connect(self._on_queue_item_removed)
+        self.queue_mgr.log_received.connect(self._on_queue_log_received)
+        self.queue_mgr.progress_updated.connect(self._on_queue_progress_updated)
+        self.queue_mgr.buttons_update_needed.connect(self._on_queue_buttons_update)
+        
+        self.init_ui()  # <-- Called AFTER queue_mgr exists
 
     def init_ui(self):
 
         self.setAcceptDrops(True)
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setChildrenCollapsible(False)
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(2, 2, 2, 2)
         main_layout.setSpacing(2)
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setStyleSheet("""
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        self.main_splitter.setStyleSheet("""
             QSplitter::handle {
                 background-color: #D1D5DB;
             }
@@ -63,12 +62,11 @@ class FilesTab(QWidget):
                 width: 1px;
             }
         """)
-        main_layout.addWidget(splitter)
-        self.splitter = splitter
 
-        # === [LEFT SIDE] 세로 Splitter로 분할 ===
+        main_layout.addWidget(self.main_splitter)
+
+# [LEFT SIDE] 세로 Splitter로 분할 =====================================================================================
         left_vsplitter = QSplitter(Qt.Vertical)
-        left_vsplitter.setChildrenCollapsible(False)
 
         # 상단: 디렉토리 버튼 + 파일 트리
         left_top_widget = QWidget()
@@ -82,48 +80,61 @@ class FilesTab(QWidget):
         left_bottom_layout.setContentsMargins(0, 0, 0, 0)
         left_bottom_layout.setSpacing(5)
         # ========================================
+        
+        # --- 좌측 상단 패널을 다시 좌우로 분할 ---
+        left_top_splitter = QSplitter(Qt.Horizontal)
 
-        # 1. Path 정보 (버튼 -> 디렉토리 변경)
-        # 레지스트리에서 마지막 세션 복구 자동 가동
+        # 1. 디렉토리 탐색기 트리
+        dir_explorer_widget = QWidget()
+        dir_explorer_layout = QVBoxLayout(dir_explorer_widget)
+        dir_explorer_layout.setContentsMargins(0,0,0,0)
+        
+        self.dir_model = QFileSystemModel()
+        self.dir_model.setRootPath('')
+        self.dir_model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot)
+
+        self.dir_explorer_tree = QTreeView()
+        self.dir_explorer_tree.setModel(self.dir_model)
+        self.dir_explorer_tree.setHeaderHidden(True)
+        self.dir_explorer_tree.setIndentation(10) 
+        for i in range(1, self.dir_model.columnCount()):
+            self.dir_explorer_tree.hideColumn(i)
+        
+        self.dir_explorer_tree.selectionModel().selectionChanged.connect(self.on_dir_explorer_selected)
+        dir_explorer_layout.addWidget(self.dir_explorer_tree)
+
+        left_top_splitter.addWidget(dir_explorer_widget)
+
+        # 2. .fst 파일 리스트
+        fst_list_widget = QWidget()
+        fst_list_layout = QVBoxLayout(fst_list_widget)
+        fst_list_layout.setContentsMargins(0,0,0,0)
+        fst_list_layout.setSpacing(5)
+
+        # --- 파일 타입 필터 체크박스 (한 줄에 배치) ---
+        filter_layout = QHBoxLayout()
+        filter_layout.setContentsMargins(0, 0, 0, 0)
+        filter_layout.setSpacing(10)
+
+        self.chk_fst = QCheckBox("📜  ")
+        self.chk_out = QCheckBox("📊  ")
+        self.chk_lin = QCheckBox("∿  ")
+        
+        self.chk_fst.setChecked(True)
+        self.chk_out.setChecked(False)
+        self.chk_lin.setChecked(False)
+
+        for chk in (self.chk_fst, self.chk_out, self.chk_lin):
+            chk.setStyleSheet("font-size: 12px; font-weight: bold; color: #374151;")
+            chk.stateChanged.connect(self.on_file_filter_changed)
+            filter_layout.addWidget(chk)
+        
+        filter_layout.addStretch()
+        fst_list_layout.addLayout(filter_layout)
+
         settings = QSettings("JHLEE", "OFA")
         last_fst_path = settings.value("LastFstPath_fst", "")
-
-        current_dir = "" 
-        display_dir = ""
         
-        if last_fst_path and os.path.exists(last_fst_path):
-            current_dir = os.path.dirname(last_fst_path)
-            display_dir = self.shrink_directory_path(current_dir, max_len=150)
-
-        # 경로 데이터 유무에 따른 최종 텍스트 마킹
-        btn_text = f"📂 {display_dir}" if display_dir else "📂 디렉토리 선택"
-
-        self.btn_change_dir = QPushButton(btn_text)
-        self.btn_change_dir.setMinimumHeight(30)
-        
-        # 마우스를 올렸을 때 뜨는 툴팁에는 '원본(긴) 경로'를 온전히 보여줍니다.
-        if current_dir:
-            self.btn_change_dir.setToolTip(current_dir)
-            
-        self.btn_change_dir.setStyleSheet("""
-            QPushButton {
-                background-color: #F3F4F6;
-                color: #1F2937;
-                font-weight: bold;
-                font-size: 12px;
-                border: 1px solid #D1D5DB;
-                border-radius: 4px;
-                text-align: left;
-                padding-left: 8px;
-            }
-            QPushButton:hover { background-color: #D1D5DB; }
-        """)
-        # 버튼을 클릭했을 때 작동할 이벤트 연결 
-        self.btn_change_dir.clicked.connect(self.btn_change_dir_clicked)
-
-        left_top_layout.addWidget(self.btn_change_dir)
-        
-        # 2. .fst 파일 list 트리뷰         
         self.dir_tree = QTreeView()  
         self.dir_tree.setHeaderHidden(True)
         self.dir_tree.setRootIsDecorated(False)    
@@ -160,10 +171,18 @@ class FilesTab(QWidget):
         self.dir_tree.setAcceptDrops(True)
         self.dir_tree.dragEnterEvent = self.dir_tree_drag_enter_event
         self.dir_tree.dropEvent = self.dir_tree_drop_event
-        left_top_layout.addWidget(self.dir_tree, stretch=4)
+        fst_list_layout.addWidget(self.dir_tree)
+        left_top_splitter.addWidget(fst_list_widget)
+
+        left_top_splitter.setSizes([250, 300])
+        left_top_layout.addWidget(left_top_splitter)
 
         if last_fst_path and os.path.exists(last_fst_path):
             self.dir_tree_update(last_fst_path)
+            # 초기 경로 설정
+            dir_path = os.path.dirname(last_fst_path)
+            self.dir_explorer_tree.setCurrentIndex(self.dir_model.index(dir_path))
+            self.dir_explorer_tree.scrollTo(self.dir_model.index(dir_path), QAbstractItemView.PositionAtTop)
 
         # 3. Process list 표시 영역 (라벨 및 Run, Stop 버튼 한 행 구성)
         process_header_layout = QHBoxLayout()
@@ -171,10 +190,10 @@ class FilesTab(QWidget):
         process_header_layout.setSpacing(0) # 레이아웃 기본 스페이싱은 0으로 격리
         
         # ⚙️ Process list 표시 라벨
-        self.lbl_process = QLabel(" ⚙️ Process list 표시")
+        self.lbl_process = QLabel(" ⚙️ OpenFAST Process list")
         self.lbl_process.setStyleSheet("font-weight: bold; color: #374151; font-size: 14px;")
         process_header_layout.addWidget(self.lbl_process)
-        self.lbl_process.mouseDoubleClickEvent = self.on_lbl_process_double_clicked # Double-click event 연결
+        self.lbl_process.mouseDoubleClickEvent = self.process_tree_adjust_run_count
         
         # 여기에 Stretch를 넣어 왼쪽 라벨을 고정하고 모든 버튼을 오른쪽 끝으로 밀어냅니다.
         process_header_layout.addStretch() 
@@ -253,7 +272,6 @@ class FilesTab(QWidget):
         self.process_tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.process_tree.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.process_tree.setContextMenuPolicy(Qt.CustomContextMenu)
-#        self.process_tree.customContextMenuRequested.connect(self.process_tree_show_run_count_menu)
         self.process_tree.setStyleSheet("""
             QTreeView {
                 border: 1px solid #E5E7EB;
@@ -287,13 +305,11 @@ class FilesTab(QWidget):
         left_vsplitter.addWidget(left_bottom_widget)
         left_vsplitter.setSizes([400, 200])  
 
-        splitter.addWidget(left_vsplitter)
+        self.main_splitter.addWidget(left_vsplitter)
 
-# endregion : =====================================================
+# endregion : ========================================================================================
 
-# region : [RIGHT SIDE] 파일 경로 상세 정보 및 실행 로그 제어 영역
-# =================================================================
-        # === [RIGHT SIDE] ===
+# region : [RIGHT SIDE] 파일 경로 상세 정보 및 실행 로그 제어 영역 =========================================
         right_vsplitter = QSplitter(Qt.Vertical)
         right_vsplitter.setChildrenCollapsible(False)
 
@@ -359,7 +375,7 @@ class FilesTab(QWidget):
         process_result_header_layout.setContentsMargins(4, 16, 0, 6)
         process_result_header_layout.setSpacing(0)
 
-        lbl_process_result = QLabel(" 🔍 Process Result")
+        lbl_process_result = QLabel(" 🔍 Process Log from OpenFAST")
         lbl_process_result.setStyleSheet("font-weight: bold; color: #374151; font-size: 14px;")
         process_result_header_layout.addWidget(lbl_process_result)
         
@@ -387,8 +403,54 @@ class FilesTab(QWidget):
         right_vsplitter.addWidget(right_bottom_widget)
         right_vsplitter.setSizes([500, 500])
         
-        splitter.addWidget(right_vsplitter)
-        splitter.setSizes([500, 500])
+        self.main_splitter.addWidget(right_vsplitter)
+        self.main_splitter.setSizes([500, 500])
+# endregion : =============================================================================================================
+
+        self.on_tab_enter()  # 탭 진입 시 UI 초기화
+
+    def on_tab_enter(self):
+        """ Files 탭에 진입할 때마다 UI를 새로고침합니다. """
+        settings = QSettings("JHLEE", "OFA")
+        last_fst_path = settings.value("LastFstPath_fst", "")
+        if last_fst_path and os.path.exists(last_fst_path):
+            self.displayed_files = [last_fst_path]  
+            self.dir_tree_update(last_fst_path)
+            self.model_tree_update(self.displayed_files)  
+
+            dir_path = os.path.dirname(last_fst_path)
+            if dir_path:
+                index = self.dir_model.index(dir_path)
+                if index.isValid():
+                    self.dir_explorer_tree.setCurrentIndex(index)
+                    self.dir_explorer_tree.scrollTo(index, QAbstractItemView.PositionAtTop)
+
+    # def on_dir_explorer_selected(self, selected, deselected):
+    #     """디렉토리 탐색기에서 디렉토리 선택 시 .fst 목록 업데이트"""
+    #     indexes = selected.indexes()
+    #     if not indexes:
+    #         return
+        
+    #     index = indexes[0]
+    #     dir_path = self.dir_model.filePath(index)
+        
+    #     if dir_path:
+    #         # .fst 파일 목록을 업데이트합니다.
+    #         self.dir_tree_update(dir_path)
+
+    def on_dir_explorer_selected(self, selected, deselected):
+        """디렉토리 탐색기에서 디렉토리 선택 시 .fst 목록 업데이트"""
+        indexes = selected.indexes()
+        if not indexes:
+            return
+        
+        index = indexes[0]
+        dir_path = self.dir_model.filePath(index)
+        print(f"[DEBUG] Explorer selected: dir_path={dir_path}")  # ← 이 줄 추가
+        
+        if dir_path:
+            # .fst 파일 목록을 업데이트합니다.
+            self.dir_tree_update(dir_path)
 
     def dir_tree_drag_enter_event(self, event):
         """ dir_tree에 드래그가 들어왔을 때 허용합니다. """
@@ -402,20 +464,9 @@ class FilesTab(QWidget):
             return
 
         file_path = urls[0].toLocalFile()
-        self.dir_tree_update(file_path)
+        self.dir_tree_update(os.path.dirname(file_path))
 
         self.splitter.setSizes([550, 450])
-
-    def on_tab_enter(self):
-        """ Files 탭에 진입할 때마다 UI를 새로고침합니다. """
-        settings = QSettings("JHLEE", "OFA")
-        last_fst_path = settings.value("LastFstPath_fst", "")
-        if last_fst_path and os.path.exists(last_fst_path):
-            self.dir_tree_update(last_fst_path)
-            self.model_tree_update(last_fst_path)
-
-# endregion : =====================================================
-
 
     def dir_tree_item_double_clicked(self, index):
         """ 좌측 트리 항목을 더블 클릭했을 때 Notepad++로 파일을 즉시 연는 슬롯 """
@@ -451,12 +502,26 @@ class FilesTab(QWidget):
         else:
             print(f"⚠️ 파일 경로 유효성 검증 실패 또는 실재하지 않음: {file_path}")
 
+
     def dir_tree_clicked(self, event):
         """ 좌측 디렉토리 트리뷰에서 마우스 물리 누름(Press) 이벤트를 가로채어 처리 """
+    # # line 502-508 부근
+    # if not index.isValid():
+    #     print("[DEBUG] index is invalid")
+    #     return
         
+    # item = self.dir_tree_model.itemFromIndex(index)
+    # if item:
+    #     clicked_file_path = item.data(Qt.UserRole)
+    #     print(f"[DEBUG] clicked: {clicked_file_path}, exists={os.path.exists(clicked_file_path) if clicked_file_path else 'None'}")
+        
+        # 0. 어떤 특수키(Modifier)가 함께 눌렸는지 확인
+        # modifiers = event.modifiers()
+        modifiers = QApplication.keyboardModifiers()
+
         # 1. 마우스가 누른 좌표로부터 트리의 인덱스 추출
         index = self.dir_tree.indexAt(event.pos())
-        
+
         # 2. QTreeView 본연의 선택 및 하이라이트 모션을 유지하기 위해 부모 이벤트 호출
         from PySide6.QtWidgets import QTreeView
         QTreeView.mousePressEvent(self.dir_tree, event)
@@ -470,13 +535,41 @@ class FilesTab(QWidget):
             clicked_file_path = item.data(Qt.UserRole)
             
             if clicked_file_path and os.path.exists(clicked_file_path):
-                print(f"⚡ [Single Click] 활성화 -> {clicked_file_path}")
                 
-                # [더블클릭 먹통 및 잔상 버그 동시 해결 완수 핵심 와꾸]
-                # self.dir_tree_update() 호출을 과감히 제거합니다! (장부 폭파 차단)
-                # 대신 장부에 이미 생성되어 있는 파일들을 돌면서 '스마트 색상 토글'만 집행합니다.
-                from PySide6.QtGui import QBrush, QColor, QFont
+                # 궤적 추적용 파일 리스트가 클래스에 없다면 안전하게 생성
+                if not hasattr(self, 'displayed_files'):
+                    self.displayed_files = []
+
+                    # # 레지스트리 세션 업데이트 with the first .fst file path
+                    # settings = QSettings("JHLEE", "OFA")
+                    # self.displayed_files[0] = settings.value("LastFstPath_fst", "", type=str) 
+
+                # Ctrl 키를 누른 상태에서 클릭한 경우
+                if bool(modifiers & Qt.ControlModifier):
+                    # 조건 3: 처음에 아무것도 표시되지 않은 상태였다면 -> 그냥 클릭한 파일만 표시
+                    if not self.displayed_files:
+                        self.displayed_files = [clicked_file_path]
+                        print(f"⚡ [Ctrl + Click] 처음 상태 -> {clicked_file_path} 단독 추가")
+                    
+                    # 조건 4: 이미 2개의 파일이 표시되어 있는 상태라면 -> 두번째 파일을 새 파일로 교체
+                    elif len(self.displayed_files) >= 2:
+                        print(f"⚡ [Ctrl + Click] 2개 포화 상태 -> 두번째 파일({self.displayed_files[1]})을 {clicked_file_path}로 교체")
+                        self.displayed_files[1] = clicked_file_path
+                    
+                    # 그 외 (이미 1개만 표시되어 있던 상태) -> 뒤에 추가하여 2개로 만듦
+                    else:
+                        if clicked_file_path not in self.displayed_files:
+                            self.displayed_files.append(clicked_file_path)
+                            print(f"⚡ [Ctrl + Click] 두번째 파일 추가 -> {clicked_file_path}")
                 
+                # 그냥 클릭한 경우 (Ctrl 없이 일반 클릭)
+                else:
+                    print(f"⚡ [Single Click] 기존 파일 초기화 후 단독 표시 -> {clicked_file_path}")
+                    self.displayed_files = [clicked_file_path]
+
+                # ---------------------------------------------------------------
+                # 🎨 [UI 렌더링] 리스트(self.displayed_files)에 포함된 파일들 하이라이트
+                # ---------------------------------------------------------------
                 for row in range(self.dir_tree_model.rowCount()):
                     loop_item = self.dir_tree_model.item(row)
                     if not loop_item:
@@ -484,14 +577,14 @@ class FilesTab(QWidget):
                         
                     loop_path = loop_item.data(Qt.UserRole)
                     
-                    # 새로 클릭한 타겟 파일인 경우 -> 연회색 강조 적용
-                    if loop_path and loop_path.lower() == clicked_file_path.lower():
+                    # 현재 표시 대상 리스트에 들어있는 파일인 경우 -> 연회색 강조 적용
+                    if loop_path and any(loop_path.lower() == df.lower() for df in self.displayed_files):
                         loop_item.setBackground(QBrush(QColor("#D1D5DB")))
                         loop_item.setForeground(QBrush(QColor("#374151")))
                         font = QFont()
                         font.setBold(True)
                         loop_item.setFont(font)
-                    # 이전에 강조되었던 과거의 파일인 경우 -> 깨끗하게 하얀색 원상 복구!
+                    # 대상이 아닌 과거의 파일인 경우 -> 깨끗하게 원상 복구!
                     else:
                         loop_item.setBackground(QBrush(Qt.GlobalColor.transparent))
                         loop_item.setForeground(QBrush(Qt.GlobalColor.black))
@@ -499,50 +592,87 @@ class FilesTab(QWidget):
                         font.setBold(False)
                         loop_item.setFont(font)
 
-                # 3. 최신 세션 경로 변수 동기화
+                # 3. 최신 세션 경로 변수 동기화 (가장 마지막에 선택된 타겟 보존)
                 self.last_fst_path = clicked_file_path
                 
-                # 🎯 [우측 화면 동기화] 우측 상세 구성 정보 트리 실시간 파싱 및 동기화
+                # 🎯 [우측 화면 동기화] model_tree에 최종 결정된 리스트 전달하여 업데이트 실행
                 if hasattr(self, 'model_tree_update'):
-                    self.model_tree_update(clicked_file_path)
+                    # 💡 힌트: 복수 파일을 받아서 처리할 수 있도록 리스트 자체를 넘겨주거나, 
+                    # 호출 형태에 맞춰 model_tree_update 내부를 리스트 대응형으로 확장하여 연동하시면 가장 좋습니다.
+                    self.model_tree_update(self.displayed_files)
                 
                 # 🎯 [화면 즉시 리프레시] 윈도우 OS 그래픽 엔진 즉시 렌더링 강제 집행
-                from PySide6.QtWidgets import QApplication
                 QApplication.processEvents()
 
+
     def dir_tree_update(self, last_fst_path):
-        """ 지정된 폴더 내부의 모든 .fst 파일만 순수하게 추출하여 좌측 리스트에 바인딩합니다. """
+        """ 지정된 폴더 내부의 파일들을 필터에 맞춰 추출하여 좌측 리스트에 바인딩합니다. """
         self.dir_tree_model.clear()
 
-        fst_files = []
+        if os.path.isfile(last_fst_path):
+            directory_path = os.path.dirname(last_fst_path)
+            self.last_fst_path = last_fst_path  # 파일 경로인 경우 보존
+        else:
+            directory_path = last_fst_path
+            # 디렉토리 경로가 들어온 경우 기존에 선택되어 있던 last_fst_path가 있다면 유지
+            if not hasattr(self, 'last_fst_path'):
+                settings = QSettings("JHLEE", "OFA")
+                self.last_fst_path = settings.value("LastFstPath_fst", "")
+    
+        extensions = []
+        if self.chk_fst.isChecked():
+            extensions.append('.fst')
+        if self.chk_out.isChecked():
+            extensions.append('.out')
+        if self.chk_lin.isChecked():
+            extensions.append('.lin')
+
+        if not extensions:
+            extensions = ['.fst']
+
         try:
-            files = os.listdir(last_fst_path)
-            fst_files = [f for f in files if f.lower().endswith('.fst')]
+            files = os.listdir(directory_path)
+            filtered_files = [f for f in files if any(f.lower().endswith(ext) for ext in extensions)]
         except Exception as e:
             if hasattr(self, 'cmd_output'):
                 self.cmd_output.append(f"❌ 폴더 읽기 실패: {str(e)}\n")
             return
-
-        # 만약 폴더 내에 .fst 파일이 하나도 없다면 안내 문구를 띄웁니다.
-        if not fst_files:
-            item = QStandardItem("🚫 .fst 파일이 없습니다.")
+        
+        # 빈 메시지도 동적으로 변경
+        if not filtered_files:
+            ext_str = ", ".join(extensions)
+            item = QStandardItem(f"🚫 {ext_str} 파일이 없습니다.")
             item.setEnabled(False)
             item.setEditable(False)
-
             self.dir_tree_model.appendRow(item)
             return
-
-        for file_name in sorted(fst_files):
-            full_path = os.path.join(last_fst_path, file_name).replace('\\', '/')
+        
+        for file_name in sorted(filtered_files):
+            full_path = os.path.join(directory_path, file_name).replace('\\', '/')
             
-            item = QStandardItem(f"📜 {file_name}")
-            item.setData(full_path, Qt.UserRole)  # 향후 클릭 이벤트 처리용 경로 저장
+            # 아이콘도 확장자별로 다르게
+            if file_name.lower().endswith('.fst'):
+                icon = "📜"
+            elif file_name.lower().endswith('.out'):
+                icon = "📊"
+            elif file_name.lower().endswith('.lin'):
+                icon = "🛠️"
+            else:
+                icon = "📄"
+            
+            item = QStandardItem(f"{icon} {file_name}")
+            item.setData(full_path, Qt.UserRole)
             item.setEditable(False) 
     
             item.setBackground(QBrush(Qt.GlobalColor.transparent))
             item.setForeground(QBrush(Qt.GlobalColor.black))
-            # 현재 등록하려는 파일의 절대경로(full_path)가 마지막 세션 파일(last_fst_path)과 완벽히 일치한다면?
-            if last_fst_path and full_path.lower() == last_fst_path.replace('\\', '/').lower():
+            
+            # 🔍 수정 포인트: 전달받은 인자 대신 self.last_fst_path 및 self.displayed_files와 비교
+            target_match_paths = [self.last_fst_path] if hasattr(self, 'last_fst_path') else []
+            if hasattr(self, 'displayed_files') and self.displayed_files:
+                target_match_paths = self.displayed_files
+
+            if any(target_path and full_path.lower() == target_path.replace('\\', '/').lower() for target_path in target_match_paths):
                 # 🎨 마우스 클릭 스타일시트와 완전히 일치하는 연회색/진한회색 주입
                 item.setBackground(QBrush(QColor("#D1D5DB")))      
                 item.setForeground(QBrush(QColor("#374151")))      
@@ -552,23 +682,17 @@ class FilesTab(QWidget):
 
             self.dir_tree_model.appendRow(item)
 
-    def btn_change_dir_clicked(self):
-        """ 'Path 정보' 버튼을 눌러 새 디렉토리를 물리적으로 선택하는 함수 """
-        old_path = self.btn_change_dir.toolTip()
-        initial_dir = old_path if old_path and os.path.exists(old_path) else ""
 
-        selected_dir = QFileDialog.getExistingDirectory(self, "작업 디렉토리 선택", initial_dir)
 
-        print(f"selected_dir = {selected_dir}")
-        
-        if selected_dir:
-            selected_dir = selected_dir.replace('\\', '/')
-            
-            shrunk_text = self.shrink_directory_path(selected_dir, max_len=100)
-            self.btn_change_dir.setText(f"📂 {shrunk_text}")
-            self.btn_change_dir.setToolTip(selected_dir)
-            
-            self.dir_tree_update(selected_dir)
+    def on_file_filter_changed(self, state):
+        """파일 필터 체크박스 변경 시 파일 리스트 즉시 갱신"""
+        indexes = self.dir_explorer_tree.selectionModel().selectedIndexes()
+        if indexes:
+            dir_path = self.dir_model.filePath(indexes[0])
+            if dir_path:
+                self.dir_tree_update(dir_path)
+
+
 
     @staticmethod
     def shrink_directory_path(path, max_len=50):
@@ -590,134 +714,6 @@ class FilesTab(QWidget):
         if len(shrunk) > max_len:
             return path[:max_len-3] + "..."
         return shrunk
-
-    def __load_fst_file_(self, file_path):
-        self.model_tree_model.clear()
-        
-        # 주소를 Computer Registry에 저장
-        settings = QSettings("JHLEE", "OFA")
-        settings.setValue("LastFstPath_fst", file_path)
-           
-        root_item = QStandardItem(f"📝 Main \t: {file_path}")
-        self.model_tree_model.appendRow(root_item)
-        
-        config = OpenFastIO.update_config_from_fst(file_path)
-
-        module = "CompElast"                
-        comp_elast = int( config[module]["current"] or config[module]["default"] )
-        if comp_elast == 1 or comp_elast == 2:
-            ed_file = config["EDFile"]["current"] or config["EDFile"]["default"]
-            ed_path = OpenFastIO.get_absolute_path(file_path, ed_file)     
-            ed_item = QStandardItem(f"📝 Elasto  \t: {ed_path}")
-            
-            for num in range(1, 4):
-                bl_file = config[f"BldFile({num})"]["current"] or config[f"BldFile({num})"]["default"]
-                bl_path = OpenFastIO.get_absolute_path(ed_path, bl_file)
-                ed_item.appendRow(QStandardItem(f"📝 BldFile({num}) \t: {bl_path}"))
-
-            root_item.appendRow(ed_item)
-
-        if comp_elast == 2:
-            bd_file = config["BDBldFile(1)"]["current"] or config["BDBldFile(1)"]["default"]
-            bd_path = OpenFastIO.get_absolute_path(file_path, bd_file)         
-            bd_item = QStandardItem(f"📝 Beam    \t: {bd_path}")
-            
-            for num in range(1, 2):
-                bl_file = config["BldFile"]["current"] or config["BldFile"]["default"]
-                bl_path = OpenFastIO.get_absolute_path(bd_path, bl_file)
-                bd_item.appendRow(QStandardItem(f"📝 BldFile \t\t: {bl_path}"))
-
-            root_item.appendRow(bd_item)
-
-        module = "CompAero"  
-        comp_aero = int( config[module]["current"] or config[module]["default"] )
-        if comp_aero > 0:
-            ae_file = config["AeroFile"]["current"] or config["AeroFile"]["default"]
-            ae_path = OpenFastIO.get_absolute_path(file_path, ae_file)            
-            ae_item = QStandardItem(f"📝 Aero   \t: {ae_path}")
-            
-            for num in range(1, 4):
-                ad_file = config[f"ADBlFile({num})"]["current"] or config[f"ADBlFile({num})"]["default"]
-                al_path = OpenFastIO.get_absolute_path(ae_path, ad_file)
-                ae_item.appendRow(QStandardItem(f"📝 ADBlFile({num}) \t: {al_path}"))
-
-            af_lists = config["AFFileList"]["current"]
-            if isinstance(af_lists, list):
-                for num, af_list in enumerate(af_lists, start=1):
-                    ae_item.appendRow(QStandardItem(f"📝 Air Foil({num}) \t: {af_list}"))          
-
-            root_item.appendRow(ae_item)
-
-        module = "CompServo"  
-        comp_servo = int( config[module]["current"] or config[module]["default"] )
-        if comp_servo > 0:
-            servo_file = config["ServoFile"]["current"] or config["ServoFile"]["default"]
-            servo_path = OpenFastIO.get_absolute_path(file_path, servo_file)            
-            servo_item = QStandardItem(f"📝 Servo   \t: {servo_path}")
-            
-            for num in range(1, 2):
-                file = config[f"DLL_FileName"]["current"] 
-                path = OpenFastIO.get_absolute_path(servo_path, file)
-                servo_item.appendRow(QStandardItem(f"📝 DLL_FileName   \t: {path}"))    
-
-            root_item.appendRow(servo_item)
-
-        module = "CompSeaSt"  
-        comp_seast = int( config[module]["current"] or config[module]["default"] )
-        if comp_seast > 0:
-            seast_file = config["SeaStFile"]["current"] or config["SeaStFile"]["default"]
-            seast_path = OpenFastIO.get_absolute_path(file_path, seast_file)            
-            seast_item = QStandardItem(f"📝 SeaSt    \t: {seast_path}")  
-
-            root_item.appendRow(seast_item)
-
-        module = "CompHydro"  
-        comp_hydro = int( config[module]["current"] or config[module]["default"] )
-        if comp_hydro > 0:
-            hydro_file = config["HydroFile"]["current"] or config["HydroFile"]["default"]
-            hydro_path = OpenFastIO.get_absolute_path(file_path, hydro_file)            
-            hydro_item = QStandardItem(f"📝 Hydro   \t: {hydro_path}")  
-
-            root_item.appendRow(hydro_item)
-
-        module = "CompSub"  
-        comp_sub = int( config[module]["current"] or config[module]["default"] )
-        if comp_sub > 0:
-            sub_file = config["SubFile"]["current"] or config["SubFile"]["default"]
-            sub_path = OpenFastIO.get_absolute_path(file_path, sub_file)            
-            sub_item = QStandardItem(f"📝 Sub \t: {sub_path}")  
-
-            root_item.appendRow(sub_item)
-
-        module = "CompMooring"  
-        comp_moor = int( config[module]["current"] or config[module]["default"] )
-        if comp_moor > 0:
-            moor_file = config["MooringFile"]["current"] or config["MooringFile"]["default"]
-            moor_path = OpenFastIO.get_absolute_path(file_path, moor_file)            
-            moor_item = QStandardItem(f"📝 Mooring\t: {moor_path}")  
-
-            root_item.appendRow(moor_item)
-
-        module = "CompIce"  
-        comp_ice = int( config[module]["current"] or config[module]["default"] )
-        if comp_ice > 0:
-            ice_file = config["IceFile"]["current"] or config["IceFile"]["default"]
-            ice_path = OpenFastIO.get_absolute_path(file_path, ice_file)            
-            ice_item = QStandardItem(f"📝 Ice \t: {ice_path}")  
-
-            root_item.appendRow(ice_item)
-
-        module = "CompSoil"  
-        comp_soil = int( config[module]["current"] or config[module]["default"] )
-        if comp_soil > 0:
-            soil_file = config["SoilFile"]["current"] or config["SoilFile"]["default"]
-            soil_path = OpenFastIO.get_absolute_path(file_path, soil_file)            
-            soil_item = QStandardItem(f"📝 Soil \t: {soil_path}")  
-
-            root_item.appendRow(soil_item)
-
-        self.model_tree.collapseAll()
-        self.model_tree.expandToDepth(0)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -837,153 +833,165 @@ class FilesTab(QWidget):
 
 
 
-    def model_tree_update(self, fst_file_path):
-        """ 우측 트리뷰 채우는 최종 연동 함수 """
+    def model_tree_update(self, fst_file_paths):
+        """ 우측 model_tree 창에 1개 또는 2개의 OpenFAST 파일 구조 정보를 표시 """
         self.model_tree_model.clear()
-        
-        if not fst_file_path or not os.path.exists(fst_file_path):
-            return
 
-        # 레지스트리 세션 업데이트
-        settings = QSettings("JHLEE", "OFA")
-        settings.setValue("LastFstPath_fst", fst_file_path)
-
-        try:
-            config = OpenFastIO.update_config_from_fst(fst_file_path)
-        except Exception as e:
-            self.cmd_output.append(f"❌ 설정 파일 연쇄 파싱 실패: {str(e)}\n")
-            return
-
-        # Main .fst 파일을 트리 내부의 유일한 최상위 루트 노드로 지정합니다.
-        main_root_item = QStandardItem(f"📜 Main \t: {fst_file_path}")
-        main_root_item.setEditable(False)
-        self.model_tree_model.appendRow(main_root_item)
-        
-        # 모듈 노드를 최상위가 아닌 'main_root_item'의 자식으로 등록하는 헬퍼 함수
-        def add_module_item(display_name, file_name, base_path):
-            abs_path = OpenFastIO.get_absolute_path(base_path, file_name)
-            item = QStandardItem(f"📝 {display_name:<8} : {abs_path}")
-            item.setEditable(False)
-            main_root_item.appendRow(item) # 최상위 장부가 아닌 main_root_item 산하 자식으로 등록
-            return item, abs_path
-
-        def get_val(key):
-            return config.get(key, {}).get("current") or config.get(key, {}).get("default", "")
-
-        # =================================================================
-        # [1] ElastoDyn & BeamDyn 구역 (다단 계층 완벽 교정)
-        # =================================================================
-        comp_elast = int(get_val("CompElast") or 0)
-        
-        if comp_elast == 1 or comp_elast == 2:
-            ed_file = get_val("EDFile")
-            # Main 산하에 Elasto 모듈 노드 등록
-            ed_item, ed_abs_path = add_module_item("Elasto", ed_file, fst_file_path)
+        # 만약 문자열(단일 경로)이 들어왔다면 리스트로 감싸서 통일성 유지
+        if isinstance(fst_file_paths, str):
+            fst_file_paths = [fst_file_paths] if fst_file_paths else []
             
-            # ElastoDyn 모드: Elasto 노드 바로 아래에 3개의 Blade 배치
-            if comp_elast == 1:
-                for num in range(1, 4):
-                    bld_file = get_val(f"BldFile({num})")
-                    if bld_file:
-                        bld_path = OpenFastIO.get_absolute_path(ed_abs_path, bld_file)
-                        child = QStandardItem(f"📝 BldFile({num}) \t: {bld_path}")
-                        child.setEditable(False)
-                        ed_item.appendRow(child)
+        if not fst_file_paths:
+            return
 
-            # BeamDyn 모드: Main -> Elasto -> Beam(num) -> BldFile 형태로 깊이 확장
-            elif comp_elast == 2:
-                for num in range(1, 4):
-                    bdbld_file = get_val(f"BDBldFile({num})")
-                    if bdbld_file:
-                        bd_path = OpenFastIO.get_absolute_path(ed_abs_path, bdbld_file)
-                        bd_item = QStandardItem(f"📝 Beam({num})  \t: {bd_path}")
-                        bd_item.setEditable(False)
-                        ed_item.appendRow(bd_item)  # Elasto 노드의 자식으로 안착
+        for file_path in fst_file_paths:
+            if not file_path or not os.path.exists(file_path):
+                continue
 
-                        # Beam 하위의 개별 BldFile 추적 (각 Beam 파일 경로 기준 해석)
-                        bld_file = get_val("BldFile")
+            # 모듈 노드를 최상위가 아닌 'main_root_item'의 자식으로 등록하는 헬퍼 함수
+            def add_module_item(display_name, file_name, base_path, file_root_item=None):
+                abs_path = OpenFastIO.get_absolute_path(base_path, file_name)
+                item = QStandardItem(f"📝 {display_name:<8} : {abs_path}")
+                item.setEditable(False)
+                file_root_item.appendRow(item)
+                return item, abs_path
+
+            try:
+                current_config = OpenFastIO.update_config_from_fst(file_path)
+            except Exception as e:
+                self.cmd_output.append(f"❌ 설정 파일 연쇄 파싱 실패 ({os.path.basename(file_path)}): {str(e)}\n")
+                continue
+
+            def get_val(key):
+                return current_config.get(key, {}).get("current") or current_config.get(key, {}).get("default", "")
+                
+            # 파일명만 추출하여 최상위 노드 이름으로 사용 (예: Main.fst)
+            file_name = os.path.basename(file_path)
+                      
+            # Main .fst 파일을 트리 내부의 최상위 루트 노드로 지정
+            file_root_item = QStandardItem(f"📜 {file_name}")
+            file_root_item.setEditable(False)
+            file_root_item.setData(file_path, Qt.UserRole) # 전체 경로 저장
+            
+            font = QFont()
+            font.setBold(True)
+            file_root_item.setFont(font)
+
+            # =================================================================
+            # [1] ElastoDyn & BeamDyn 구역 (다단 계층 완벽 교정)
+            # =================================================================
+            comp_elast = int(get_val("CompElast") or 0)
+
+            if comp_elast == 1 or comp_elast == 2:
+                ed_file = get_val("EDFile")
+                ed_item, ed_abs_path = add_module_item("Elasto", ed_file, file_path, file_root_item=file_root_item)
+                
+                # ElastoDyn 모드: Elasto 노드 바로 아래에 3개의 Blade 배치
+                if comp_elast == 1:
+                    for num in range(1, 4):
+                        bld_file = get_val(f"BldFile({num})")
                         if bld_file:
-                            bld_path = OpenFastIO.get_absolute_path(bd_path, bld_file)
-                            child = QStandardItem(f"📝 BldFile   \t: {bld_path}")
+                            bld_path = OpenFastIO.get_absolute_path(ed_abs_path, bld_file)
+                            child = QStandardItem(f"📝 BldFile({num}) \t: {bld_path}")
                             child.setEditable(False)
-                            bd_item.appendRow(child) # Beam 노드의 자식으로 안착
+                            ed_item.appendRow(child)
 
-            twr_file = get_val(f"TwrFile")
-            twr_path = OpenFastIO.get_absolute_path(ed_abs_path, twr_file)
-            child = QStandardItem(f"📝 TwrFile \t: {twr_path}")
-            child.setEditable(False)
-            ed_item.appendRow(child)
+                # BeamDyn 모드: Main -> Elasto -> Beam(num) -> BldFile 형태로 깊이 확장
+                elif comp_elast == 2:
+                    for num in range(1, 4):
+                        bdbld_file = get_val(f"BDBldFile({num})")
+                        if bdbld_file:
+                            bd_path = OpenFastIO.get_absolute_path(ed_abs_path, bdbld_file)
+                            bd_item = QStandardItem(f"📝 Beam({num})  \t: {bd_path}")
+                            bd_item.setEditable(False)
+                            ed_item.appendRow(bd_item)  # Elasto 노드의 자식으로 안착
 
-        # =================================================================
-        # [2] AeroDyn 구역
-        # =================================================================
-        comp_aero = int(get_val("CompAero") or 0)
-        if comp_aero > 0:
-            ae_file = get_val("AeroFile")
-            ae_item, ae_abs_path = add_module_item("Aero", ae_file, fst_file_path)
-            
-            for num in range(1, 4):
-                adbl_file = get_val(f"ADBlFile({num})")
-                if adbl_file:
-                    al_path = OpenFastIO.get_absolute_path(ae_abs_path, adbl_file)
-                    child = QStandardItem(f"📝 ADBlFile({num}) \t: {al_path}")
-                    child.setEditable(False)
-                    ae_item.appendRow(child)
+                            # Beam 하위의 개별 BldFile 추적 (각 Beam 파일 경로 기준 해석)
+                            bld_file = get_val("BldFile")
+                            if bld_file:
+                                bld_path = OpenFastIO.get_absolute_path(bd_path, bld_file)
+                                child = QStandardItem(f"📝 BldFile   \t: {bld_path}")
+                                child.setEditable(False)
+                                bd_item.appendRow(child) # Beam 노드의 자식으로 안착
 
-            af_lists = config.get("AFFileList", {}).get("current", [])
-            if isinstance(af_lists, list):
-                for num, af_list in enumerate(af_lists, start=1):
-                    child = QStandardItem(f"📝 Air Foil({num}) \t: {af_list}")
-                    child.setEditable(False)
-                    ae_item.appendRow(child)
-
-        # =================================================================
-        # [3] ServoDyn 구역
-        # =================================================================
-        comp_servo = int(get_val("CompServo") or 0)
-        if comp_servo > 0:
-            servo_file = get_val("ServoFile")
-            sv_item, sv_abs_path = add_module_item("Servo", servo_file, fst_file_path)
-            
-            dll_file = get_val("DLL_FileName")
-            if dll_file:
-                dll_path = OpenFastIO.get_absolute_path(sv_abs_path, dll_file)
-                child = QStandardItem(f"📝 DLL_File   \t: {dll_path}")
+                twr_file = get_val(f"TwrFile")
+                twr_path = OpenFastIO.get_absolute_path(ed_abs_path, twr_file)
+                child = QStandardItem(f"📝 TwrFile \t: {twr_path}")
                 child.setEditable(False)
-                sv_item.appendRow(child)
+                ed_item.appendRow(child)
 
-        # =================================================================
-        # [4] 나머지 독립형 단일 모듈 라인업 (Main의 바로 아래 자식들)
-        # =================================================================
-        independent_modules = [
-            ("CompInflow", "InflowFile", "Inflow"),
-            ("CompSeaSt", "SeaStFile", "SeaSt"),
-            ("CompHydro", "HydroFile", "Hydro"),
-            ("CompSub", "SubFile", "Sub"),
-            ("CompMooring", "MooringFile", "Mooring"),
-            ("CompIce", "IceFile", "Ice"),
-            ("CompSoil", "SoilFile", "Soil")
-        ]
+            # =================================================================
+            # [2] AeroDyn 구역
+            # =================================================================
+            comp_aero = int(get_val("CompAero") or 0)
+            if comp_aero > 0:
+                ae_file = get_val("AeroFile")
+                ae_item, ae_abs_path = add_module_item("Aero", ae_file, file_path, file_root_item=file_root_item)
 
-        for comp_key, file_key, display_name in independent_modules:
-            comp_val = int(get_val(comp_key) or 0)
-            if comp_val > 0:
-                f_name = get_val(file_key)
-                if f_name:
-                    add_module_item(display_name, f_name, fst_file_path)
+                for num in range(1, 4):
+                    adbl_file = get_val(f"ADBlFile({num})")
+                    if adbl_file:
+                        al_path = OpenFastIO.get_absolute_path(ae_abs_path, adbl_file)
+                        child = QStandardItem(f"📝 ADBlFile({num})\t: {al_path}")
+                        child.setEditable(False)
+                        ae_item.appendRow(child)
 
-        # =================================================================
-        # ⚡ [트리 화살표 및 초기 접힘 상태 제어 교정]
-        # =================================================================
-        self.model_tree.setRootIsDecorated(True)
-        self.model_tree.setIndentation(20) 
-        
-        # 💡 최상위 Main 노드 하위만 처음에 깔끔하게 노출되도록 전체 대기 정렬
-        self.model_tree.collapseAll()
-        
-        # 💡 첫 실행 시 유저가 Main의 존재를 바로 볼 수 있게 Main 루트만 한 단계 확장해 둡니다.
-        first_index = self.model_tree_model.index(0, 0)
-        self.model_tree.expand(first_index)
+                af_lists = config.get("AFFileList", {}).get("current", [])
+                if isinstance(af_lists, list):
+                    for num, af_list in enumerate(af_lists, start=1):
+                        child = QStandardItem(f"📝 Air Foil({num}) \t: {af_list}")
+                        child.setEditable(False)
+                        ae_item.appendRow(child)
+
+            # =================================================================
+            # [3] ServoDyn 구역
+            # =================================================================
+            comp_servo = int(get_val("CompServo") or 0)
+            if comp_servo > 0:
+                servo_file = get_val("ServoFile")
+                sv_item, sv_abs_path = add_module_item("Servo", servo_file, file_path, file_root_item=file_root_item)
+                
+                dll_file = get_val("DLL_FileName")
+                if dll_file:
+                    dll_path = OpenFastIO.get_absolute_path(sv_abs_path, dll_file)
+                    child = QStandardItem(f"📝 DLL_File   \t: {dll_path}")
+                    child.setEditable(False)
+                    sv_item.appendRow(child)
+
+            # =================================================================
+            # [4] 나머지 독립형 단일 모듈 라인업 (Main의 바로 아래 자식들)
+            # =================================================================
+            independent_modules = [
+                ("CompInflow", "InflowFile", "Inflow"),
+                ("CompSeaSt", "SeaStFile", "SeaSt"),
+                ("CompHydro", "HydroFile", "Hydro"),
+                ("CompSub", "SubFile", "Sub"),
+                ("CompMooring", "MooringFile", "Mooring"),
+                ("CompIce", "IceFile", "Ice"),
+                ("CompSoil", "SoilFile", "Soil")
+            ]
+
+            for comp_key, file_key, display_name in independent_modules:
+                comp_val = int(get_val(comp_key) or 0)
+                if comp_val > 0:
+                    f_name = get_val(file_key)
+                    if f_name:
+                        add_module_item(display_name, f_name, file_path, file_root_item=file_root_item)
+
+            # 3. 최종 완성된 파일 루트 노드를 메인 트리 모델에 등록
+            self.model_tree_model.appendRow(file_root_item)
+
+            # =================================================================
+            # ⚡ [트리 화살표 및 초기 접힘 상태 제어 교정]
+            # =================================================================
+            self.model_tree.setRootIsDecorated(True)
+            self.model_tree.setIndentation(20) 
+
+            for i in range(self.model_tree_model.rowCount()):
+                root_index = self.model_tree_model.index(i, 0)
+                if root_index.isValid():
+                    self.model_tree.setExpanded(root_index, True)             
+
 
     def model_tree_press_event(self, event):
         """ 마우스 클릭 시 클릭한 위치와 항목을 기억하는 함수 """
@@ -1001,7 +1009,7 @@ class FilesTab(QWidget):
             return
 
         # 현재 마우스로 붙잡은 트리 아이템 가져오기
-        index = self.model_tree_view.indexAt(current_pos)
+        index = self.model_tree.indexAt(current_pos)
         if not index.isValid():
             return
 
@@ -1668,27 +1676,16 @@ class FilesTab(QWidget):
         last_fst = settings.value("LastFstPath_fst", "")
         return os.path.dirname(last_fst) if last_fst else os.getcwd()
 
-    def on_lbl_process_double_clicked(self, event):
-        """'Process list 표시' 라벨 더블 클릭 시 최대 동시 실행 개수 변경 다이얼로그 호출"""
-        if event.button() == Qt.LeftButton:
-            self.process_tree_adjust_run_count()
 
-    def process_tree_adjust_run_count(self):
-        """런 개수 조절 다이얼로그"""
-        count, ok = QInputDialog.getInt(
-            self, "최대 동시 실행 개수 설정",
-            "최대 동시 실행할 OpenFAST 프로세스 개수를 입력하세요:",
-            self.process_tree_max_concurrent, 1, 100, 1 # 최소 1, 최대 100, 스텝 1
-        )
-        if ok:
-            self.process_tree_max_concurrent = count
-            if hasattr(self, 'cmd_output'):
-                self.cmd_output.append(f"⚙️ 최대 동시 실행 개수: {count}로 설정됨\n")
-            self.process_tree_try_start_next()  # 새 설정으로 즉시 실행
+    def process_tree_adjust_run_count(self, event=None):
+        """최대 동시 실행 개수 조절 (ProcessQueueManager에 위임)"""
+        new_count = self.queue_mgr.adjust_max_concurrent(self, self.queue_mgr.queue.max_concurrent)
+        if new_count is not None and hasattr(self, 'cmd_output'):
+            self.cmd_output.append(f"⚙️ 최대 동시 실행 개수: {new_count}로 설정됨\n")
 
     def cleanup_processes(self):
         """애플리케이션 종료 시 모든 실행 중인 QProcess를 정리합니다."""
-        print("🧹 [Cleanup] 모든 실행 중인 프로세스를 종료합니다...")
+        print("[Cleanup] 모든 실행 중인 프로세스를 종료합니다...")
         
         # process_tree_process_map의 복사본을 만들어 순회 (원본 딕셔너리 변경에 따른 문제 방지)
         for file_path, proc in list(self.process_tree_process_map.items()):
@@ -1705,164 +1702,252 @@ class FilesTab(QWidget):
         self.process_tree_process_map.clear()
 
 
+    def process_tree_move_selected_up(self):
+        """Shift + ↑ : 런예정 리스트 내 선택항목 위로 이동"""
+        selected_items = self.process_tree.selectedItems()
+        if not selected_items:
+            return
 
+        # PENDING 상태인 항목만 필터링
+        pending_items = [it for it in selected_items if it.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING]
+        if not pending_items:
+            return
 
+        # 올바른 순서로 이동하기 위해 행 번호 기준으로 정렬
+        pending_items.sort(key=lambda item: self.process_tree.indexOfTopLevelItem(item))
+
+        for item in pending_items:
+            row = self.process_tree.indexOfTopLevelItem(item)
+            if row > 0:
+                # 바로 위 아이템이 PENDING 상태가 아니면 이동하지 않음
+                above_item = self.process_tree.topLevelItem(row - 1)
+                if above_item and above_item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING:
+                    self.process_tree.takeTopLevelItem(row)
+                    self.process_tree.insertTopLevelItem(row - 1, item)
+                    item.setSelected(True)
+
+        # 큐 순서도 동기화
+        self.process_tree_resync_pending_queue()
+
+    def process_tree_move_selected_down(self):
+        """Shift + ↓ : 런예정 리스트 내 선택항목 아래로 이동"""
+        selected_items = self.process_tree.selectedItems()
+        if not selected_items:
+            return
+
+        pending_items = [it for it in selected_items if it.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING]
+        if not pending_items:
+            return
+
+        # 아래에서 위로 순서로 정렬해야 인덱스가 꼬이지 않음
+        pending_items.sort(key=lambda item: self.process_tree.indexOfTopLevelItem(item), reverse=True)
+
+        for item in pending_items:
+            row = self.process_tree.indexOfTopLevelItem(item)
+            # 마지막 아이템이 아니어야 함
+            if row < self.process_tree.topLevelItemCount() - 1:
+                below_item = self.process_tree.topLevelItem(row + 1)
+                if below_item and below_item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING:
+                    self.process_tree.takeTopLevelItem(row)
+                    self.process_tree.insertTopLevelItem(row + 1, item)
+                    item.setSelected(True)
+
+        self.process_tree_resync_pending_queue()
+
+    def process_tree_resync_pending_queue(self):
+        """UI 순서를 큐 데이터와 동기화"""
+        self.process_tree_run_queue["pending"] = [
+            self.process_tree.topLevelItem(i).data(0, Qt.UserRole)
+            for i in range(self.process_tree.topLevelItemCount())
+            if self.process_tree.topLevelItem(i).data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING
+        ]
+
+    def keyPressEvent(self, event):
+        if event.modifiers() & Qt.ShiftModifier:
+            if event.key() == Qt.Key_Up:
+                self.process_tree_move_selected_up()
+                return
+            elif event.key() == Qt.Key_Down:
+                self.process_tree_move_selected_down()
+                return
+        super().keyPressEvent(event)
+
+    def process_tree_save_run_queue(self):
+        """실행 큐 상태를 .ofa_run_queue.json으로 저장"""
+        queue_data = {
+            "pending": self.process_tree_run_queue["pending"],
+            "running": self.process_tree_run_queue["running"],
+            "completed": self.process_tree_run_queue["completed"],
+            "max_concurrent": self.process_tree_max_concurrent,
+            "timestamp": datetime.now().isoformat(),
+        }
+        
+        save_path = os.path.join(self.get_current_working_dir(), ".ofa_run_queue.json")
+        try:
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(queue_data, f, indent=2)
+            # cmd_output에 저장 완료 메시지
+            if hasattr(self, 'cmd_output'):
+                self.cmd_output.append(f"💾 실행 큐 상태 저장: {save_path}\n")
+        except Exception as e:
+            print(f"❌ 큐 저장 실패: {e}")
+
+    def process_tree_load_run_queue(self):
+        """저장된 실행 큐 상태 복구 (사용자 확인 후)"""
+        save_path = os.path.join(self.get_current_working_dir(), ".ofa_run_queue.json")
+        if not os.path.exists(save_path):
+            return
+        
+        # 파일 수정 시간 확인
+        mtime = datetime.fromtimestamp(os.path.getmtime(save_path))
+        
+        reply = QMessageBox.question(
+            self, "실행 상태 복구",
+            f"이전 실행 상태가 발견되었습니다.\n\n"
+            f"저장 시간: {mtime.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"복구하시겠습니까?\n\n"
+            f"(이미 완료된 작업은 런완료로, 진행 중이던 작업은 런예정으로 복구됩니다.)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        
+        if reply == QMessageBox.No:
+            return
+        
+        try:
+            with open(save_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
             
+            self.process_tree_restore_queue(data)
+            if hasattr(self, 'cmd_output'):
+                self.cmd_output.append("🔄 실행 큐 상태 복구 완료\n")
+        except Exception as e:
+            QMessageBox.warning(self, "복구 실패", f"실행 상태 복구 중 오류:\n{e}")
+
+    def process_tree_restore_queue(self, data):
+        """복구된 데이터로 큐와 UI 재구성"""
+        # 기존 트리 비우기
+        self.process_tree.clear()
+        
+        # 큐 복원
+        self.process_tree_run_queue = {
+            "pending": data.get("pending", []),
+            "running": data.get("running", []),   # 재시작 시에는 모두 런예정으로 처리
+            "completed": data.get("completed", []),
+        }
+        self.process_tree_max_concurrent = data.get("max_concurrent", 3)
+        
+        # 런중 → 런예정으로 이동 (재시작 시)
+        restored_running = self.process_tree_run_queue["running"]
+        self.process_tree_run_queue["pending"] = restored_running + self.process_tree_run_queue["pending"]
+        self.process_tree_run_queue["running"] = []
+        
+        # UI 재구성
+        # 1. 런예정 항목 추가
+        for fp in self.process_tree_run_queue["pending"]:
+            self.process_tree_add_to_pending(fp)
+
+        # 2. 런완료/에러/중단 항목 복원
+        for completed_info in self.process_tree_run_queue.get("completed", []):
+            path = completed_info.get("path")
+            success = completed_info.get("success")
+            status = PROCESS_TREE_STATUS_COMPLETED if success else PROCESS_TREE_STATUS_ERROR
+            item = QTreeWidgetItem([os.path.basename(path), "", "", ""])
+            item.setData(0, Qt.UserRole, path)
+            self.process_tree_move_to_completed(item, path, status, is_error=not success)
+            self.process_tree.addTopLevelItem(item)
+
+    def closeEvent(self, event):
+        """프로그램 종료 전 상태 저장"""
+        self.process_tree_save_run_queue()
+        event.accept()
 
 
-    # def process_tree_move_selected_up(self):
-    #     """Shift + ↑ : 런예정 리스트 내 선택항목 위로 이동"""
-    #     selected = [it for it in self.process_tree.selectedItems()
-    #                 if it.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING]
-    #     if not selected:
-    #         return
-        
-    #     pending_group = self.process_tree_status_groups[PROCESS_TREE_STATUS_PENDING]
-    #     for item in selected:
-    #         row = pending_group.indexOfChild(item)
-    #         if row > 0:
-    #             prev_item = pending_group.takeChild(row)
-    #             pending_group.insertChild(row - 1, prev_item)
-    #             prev_item.setSelected(True)
-        
-    #     # 큐 순서도 동기화
-    #     self.process_tree_resync_pending_queue()
+#-------------------------------------------------------------------
 
-    # def process_tree_move_selected_down(self):
-    #     """Shift + ↓ : 런예정 리스트 내 선택항목 아래로 이동"""
-    #     selected = [it for it in self.process_tree.selectedItems()
-    #                 if it.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_PENDING]
-    #     if not selected:
-    #         return
-        
-    #     pending_group = self.process_tree_status_groups[PROCESS_TREE_STATUS_PENDING]
-    #     for item in selected:
-    #         row = pending_group.indexOfChild(item)
-    #         if row < pending_group.childCount() - 1:
-    #             next_item = pending_group.takeChild(row)
-    #             pending_group.insertChild(row + 1, next_item)
-    #             next_item.setSelected(True)
-        
-    #     self.process_tree_resync_pending_queue()
+    def _on_queue_item_added(self, item):
+        """큐에 새 아이템 추가 시 UI 트리에 추가"""
+        qt_item = QTreeWidgetItem([os.path.basename(item.path), "Pending", "", ""])
+        qt_item.setData(0, Qt.UserRole, item.path)
+        qt_item.setData(1, Qt.UserRole, item.status)
+        self._apply_status_style(qt_item, item.status)
+        self.process_tree.addTopLevelItem(qt_item)
+        item.qt_item = qt_item
 
-    # def process_tree_resync_pending_queue(self):
-    #     """UI 순서를 큐 데이터와 동기화"""
-    #     pending_group = self.process_tree_status_groups[PROCESS_TREE_STATUS_PENDING]
-    #     self.process_tree_run_queue["pending"] = [
-    #         pending_group.child(i).data(0, Qt.UserRole)
-    #         for i in range(pending_group.childCount())
-    #     ]
+    def _on_queue_item_updated(self, item):
+        """큐 아이템 상태 변경 시 UI 업데이트"""
+        qt_item = getattr(item, 'qt_item', None)
+        if qt_item:
+            self._apply_status_style(qt_item, item.status)
+            if item.start_time:
+                qt_item.setText(2, item.start_time)
+            if item.end_time:
+                qt_item.setText(3, item.end_time)
 
-    # def keyPressEvent(self, event):
-    #     if event.modifiers() & Qt.ShiftModifier:
-    #         if event.key() == Qt.Key_Up:
-    #             self.process_tree_move_selected_up()
-    #             return
-    #         elif event.key() == Qt.Key_Down:
-    #             self.process_tree_move_selected_down()
-    #             return
-    #     super().keyPressEvent(event)
+    def _on_queue_item_removed(self, item):
+        """큐에서 아이템 제거 시 UI에서 제거"""
+        qt_item = getattr(item, 'qt_item', None)
+        if qt_item:
+            row = self.process_tree.indexOfTopLevelItem(qt_item)
+            if row != -1:
+                self.process_tree.takeTopLevelItem(row)
 
-    # def process_tree_save_run_queue(self):
-    #     """실행 큐 상태를 .ofa_run_queue.json으로 저장"""
-    #     queue_data = {
-    #         "pending": self.process_tree_run_queue["pending"],
-    #         "running": self.process_tree_run_queue["running"],
-    #         "completed": self.process_tree_run_queue["completed"],
-    #         "max_concurrent": self.process_tree_max_concurrent,
-    #         "timestamp": datetime.now().isoformat(),
-    #     }
+    def _on_queue_log_received(self, file_path: str, data: str):
+        """로그 수신 시 process_logs 업데이트"""
+        if not hasattr(self, 'process_logs'):
+            self.process_logs = {}
+        if file_path not in self.process_logs:
+            self.process_logs[file_path] = ""
+        self.process_logs[file_path] += data
         
-    #     save_path = os.path.join(self.get_current_working_dir(), ".ofa_run_queue.json")
-    #     try:
-    #         with open(save_path, 'w', encoding='utf-8') as f:
-    #             json.dump(queue_data, f, indent=2)
-    #         # cmd_output에 저장 완료 메시지
-    #         if hasattr(self, 'cmd_output'):
-    #             self.cmd_output.append(f"💾 실행 큐 상태 저장: {save_path}\n")
-    #     except Exception as e:
-    #         print(f"❌ 큐 저장 실패: {e}")
+        if getattr(self, 'current_viewing_path', '') == file_path:
+            if hasattr(self, 'cmd_output'):
+                self.cmd_output.append(data)
+                self.cmd_output.moveCursor(QtGui.QTextCursor.End)
 
-    # def process_tree_load_run_queue(self):
-    #     """저장된 실행 큐 상태 복구 (사용자 확인 후)"""
-    #     save_path = os.path.join(self.get_current_working_dir(), ".ofa_run_queue.json")
-    #     if not os.path.exists(save_path):
-    #         return
-        
-    #     # 파일 수정 시간 확인
-    #     mtime = datetime.fromtimestamp(os.path.getmtime(save_path))
-        
-    #     reply = QMessageBox.question(
-    #         self, "실행 상태 복구",
-    #         f"이전 실행 상태가 발견되었습니다.\n\n"
-    #         f"저장 시간: {mtime.strftime('%Y-%m-%d %H:%M:%S')}\n"
-    #         f"복구하시겠습니까?\n\n"
-    #         f"(이미 완료된 작업은 런완료로, 진행 중이던 작업은 런예정으로 복구됩니다.)",
-    #         QMessageBox.Yes | QMessageBox.No,
-    #         QMessageBox.Yes
-    #     )
-        
-    #     if reply == QMessageBox.No:
-    #         return
-        
-    #     try:
-    #         with open(save_path, 'r', encoding='utf-8') as f:
-    #             data = json.load(f)
-            
-    #         self.process_tree_restore_queue(data)
-    #         if hasattr(self, 'cmd_output'):
-    #             self.cmd_output.append("🔄 실행 큐 상태 복구 완료\n")
-    #     except Exception as e:
-    #         QMessageBox.warning(self, "복구 실패", f"실행 상태 복구 중 오류:\n{e}")
+    def _on_queue_progress_updated(self, file_path: str, percent: int):
+        """진행률 업데이트 시 Finish 컬럼에 표시"""
+        item = self._find_qt_item_by_path(file_path)
+        if item and item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_RUNNING:
+            item.setText(3, f"{percent}%")
 
-    # def process_tree_restore_queue(self, data):
-    #     """복구된 데이터로 큐와 UI 재구성"""
-    #     # 기존 상태 그룹 비우기
-    #     for group in self.process_tree_status_groups.values():
-    #         group.takeChildren()  # 자식 모두 제거
-        
-    #     # 큐 복원
-    #     self.process_tree_run_queue = {
-    #         "pending": data.get("pending", []),
-    #         "running": data.get("running", []),   # 재시작 시에는 모두 런예정으로 처리
-    #         "completed": data.get("completed", []),
-    #     }
-    #     self.process_tree_max_concurrent = data.get("max_concurrent", 3)
-        
-    #     # 런중 → 런예정으로 이동 (재시작 시)
-    #     restored_running = self.process_tree_run_queue["running"]
-    #     self.process_tree_run_queue["pending"] = restored_running + self.process_tree_run_queue["pending"]
-    #     self.process_tree_run_queue["running"] = []
-        
-    #     # UI 재구성
-    #     for fp in self.process_tree_run_queue["pending"]:
-    #         self.process_tree_add_to_pending(fp)  # add_to_pending 내에서 즉시 실행 가능 확인
-        
-    #     # 런완료 아이템 복원
-    #     for i, fp in enumerate(data.get("completed", [])):
-    #         # 여기서 completed의 각 항목은 (file_path, success) 튜플이라고 가정
-    #         # 실제 저장 형식: [{"path": "...", "success": true}, ...]
-    #         pass  # 구체적 복구 로직은 저장 형식에 따라 조정
+    def _on_queue_buttons_update(self):
+        """버튼 상태 업데이트 요청"""
+        if hasattr(self, 'process_tree_on_item_selection_changed'):
+            self.process_tree_on_item_selection_changed()
 
-    # def closeEvent(self, event):
-    #     """프로그램 종료 전 상태 저장"""
-    #     self.process_tree_save_run_queue()
-    #     event.accept()
+    def _find_qt_item_by_path(self, file_path: str):
+        """경로로 QTreeWidgetItem 찾기"""
+        for i in range(self.process_tree.topLevelItemCount()):
+            item = self.process_tree.topLevelItem(i)
+            if item and item.data(0, Qt.UserRole) == file_path:
+                return item
+        return None
 
-    # def process_tree_adjust_run_count(self):
-    #     """런 개수 조절 다이얼로그"""
-    #     count, ok = QInputDialog.getInt(
-    #         self, "런 개수 설정",
-    #         "최대 동시 실행 개수를 입력하세요:",
-    #         self.process_tree_max_concurrent, 1, 10, 1
-    #     )
-    #     if ok:
-    #         self.process_tree_max_concurrent = count
-    #         self.cmd_output.append(f"⚙️ 최대 동시 실행 개수: {count}로 설정됨\n")
-    #         self.process_tree_try_start_next()  # 새 설정으로 즉시 실행
+    def _apply_status_style(self, item, status):
+        """아이템에 상태별 스타일 적용"""
+        status_map = {
+            0: {"bg": "#FFFFFF", "fg": "#000000", "text": "Pending"},
+            1: {"bg": "#DCFCE7", "fg": "#000000", "text": "Running"},
+            2: {"bg": "#D1D5DB", "fg": "#000000", "text": "Completed"},
+            3: {"bg": "#D1D5DB", "fg": "#000000", "text": "Stopped"},
+            4: {"bg": "#D1D5DB", "fg": "#EF4444", "text": "Error"},
+        }
+        style = status_map.get(status)
+        if not style:
+            return
+        for col in range(4):
+            item.setBackground(col, QBrush(QColor(style["bg"])))
+            item.setForeground(col, QBrush(QColor(style["fg"])))
+        item.setText(1, style["text"])
+
+#-------------------------------------------------------------------
 
 
 
+
+
+        
 
 
     def mouse_Rclick_open_directory(self, text):
@@ -2352,8 +2437,9 @@ class FilesTab(QWidget):
 
         # 5. [핵심] 가상 엔진 데이터 동기화 및 트리뷰 자동 리로드
         try:
-            if hasattr(self, 'model_tree_update'):
+            if hasattr(self, 'model_tree_update') and hasattr(self, 'dir_tree_update'):
                 self.model_tree_update(final_new_fst_path)
+                self.dir_tree_update(final_new_fst_path) # 좌측 .fst 파일 목록 트리도 함께 새로고침
                 
                 # 수집된 총 개수 정의
                 total_collected = len(files_to_copy)
@@ -2535,3 +2621,17 @@ class FilesTab(QWidget):
         self.model_tree_update(main_fst_path)
 
 
+    def closeEvent(self, event):
+        """프로그램 종료 전 상태 저장"""
+        self.process_tree_save_run_queue()
+        
+        # 현재 로드된 .fst 파일 경로 저장
+        try:
+            main_fst = OpenFastIO.current_config.get("MainFST", {}).get("current")
+            if main_fst:
+                settings = QSettings("JHLEE", "OFA")
+                settings.setValue("LastFstPath_fst", main_fst)
+        except Exception:
+            pass
+        
+        event.accept()

@@ -65,21 +65,10 @@ class WindTab(QWidget):
         top_bar_layout.setSpacing(15)
 
         # --- 1. 파일 경로 ---
-        key_CompInflow = OpenFastIO.current_config.get("CompInflow", {}).get("current", "")
-        
-        is_still_wind = key_CompInflow in ("0", "")
-        if key_CompInflow in ("0", ""):
-            FileName = "Still Wind Case (CompInflow=0)"
-            FilePath = ""
-        else:
-            FileName = "📝 File Name:"
-            inflow_file_info = OpenFastIO.current_config.get("InflowFile", {})
-            inflow_file_path = inflow_file_info.get("current") or inflow_file_info.get("default", "N/A")
-            FilePath = OpenFastIO.get_absolute_path(OpenFastIO.current_config.get("MainFST", {}).get("current", ""), inflow_file_path)
-
-        lbl_filename = QLabel(FileName)
+        lbl_filename = QLabel("📝 File Name:")
         lbl_filename.setStyleSheet("font-weight: bold; font-size: 14px;")
-        self.lbl_file_path = QLabel(FilePath)
+        # 초기 상태는 "N/A"로 설정하고, on_tab_enter에서 실제 경로로 업데이트합니다.
+        self.lbl_file_path = QLabel("N/A")
         self.lbl_file_path.setStyleSheet("font-weight: bold; font-size: 14px;")
         self.lbl_file_path.mouseDoubleClickEvent = self.open_file_in_editor
         top_bar_layout.addWidget(lbl_filename)
@@ -298,10 +287,6 @@ class WindTab(QWidget):
         self.info_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(self.info_label, 1)
 
-        # 초기 상태 설정
-        self.info_label.setVisible(is_still_wind)
-        self.main_splitter.setVisible(not is_still_wind)
-
     def open_file_in_editor(self, event):
         """ lbl_file_path를 더블 클릭했을 때 Notepad++로 파일을 엽니다. """
         file_path = self.lbl_file_path.text()
@@ -330,8 +315,19 @@ class WindTab(QWidget):
         self.main_splitter.setVisible(not is_still_wind)
 
         if not is_still_wind:
+            # 파일 경로 업데이트 로직
+            inflow_file_info = OpenFastIO.current_config.get("InflowFile", {})
+            inflow_file_path = inflow_file_info.get("current") or inflow_file_info.get("default", "N/A")
+            main_fst_path = OpenFastIO.current_config.get("MainFST", {}).get("current", "")
+            
+            if main_fst_path and inflow_file_path:
+                abs_path = OpenFastIO.get_absolute_path(main_fst_path, inflow_file_path)
+                self.lbl_file_path.setText(abs_path)
+            else:
+                self.lbl_file_path.setText("N/A")
             self.refresh_ui_from_file()
         else:
+            self.lbl_file_path.setText("Still Wind Case (CompInflow=0)")
             self.update_apply_button(active=False)
 
     def on_tab_leave(self):

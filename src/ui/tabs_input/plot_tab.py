@@ -19,8 +19,9 @@ import matplotlib.pyplot as plt
 from src.core.openfast_io import OpenFastIO  # 💡 코어 엔진 임포트
 
 class PlotTab(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, main_window=None, parent=None):
         super().__init__(parent)
+        self.main_window = main_window
 
         # 구조: { file_title: (dataframe, columns_list) }
         self.data_dict = {} 
@@ -206,21 +207,24 @@ class PlotTab(QWidget):
             # 1. OpenFastIO에 현재 설정된 MainFST 파일 경로가 있는지 확인
             fst_config = OpenFastIO.current_config.get("MainFST", {})
             fst_path = fst_config.get("current", "").strip()
-            
+                
             if not fst_path or not os.path.exists(fst_path):
                 return  # .fst 파일 경로가 비어있거나 실제 존재하지 않으면 통과
-                
+
+            print(f"[AutoLoad] 시뮬레이션 결과 로드: fst_path = {fst_path}")    
             # 2. .fst 파일 이름의 확장자를 떼고 .out 또는 .txt 경로 조합
             base_path, _ = os.path.splitext(fst_path)
             out_candidate = base_path + ".out"
             txt_candidate = base_path + ".txt"
+
+            print(f"[AutoLoad] 시뮬레이션 결과 로드: base_path = {out_candidate}")
             
             # 3. .out 파일이 먼저 있는지 보고, 없으면 .txt 파일 확인 후 자동 로드
             if os.path.exists(out_candidate):
-                print(f"[AutoLoad] 시뮬레이션 결과 자동 로드: {out_candidate}")
+                print(f"[AutoLoad] 시뮬레이션 결과 로드: out_candidate = {out_candidate}")
                 self.load_output_data(out_candidate)
             elif os.path.exists(txt_candidate):
-                print(f"[AutoLoad] 시뮬레이션 결과 자동 로드: {txt_candidate}")
+                print(f"[AutoLoad] 시뮬레이션 결과 로드: txt_candidate = {txt_candidate}")
                 self.load_output_data(txt_candidate)
                 
         except Exception as e:
@@ -306,6 +310,8 @@ class PlotTab(QWidget):
 
     def load_output_data(self, file_path):
         "데이터 파싱 및 로드"
+        print(f"load_output_data() file_path: {file_path}")
+        
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
@@ -324,10 +330,21 @@ class PlotTab(QWidget):
             raw_cols = lines[header_idx].strip().split()
             raw_units = lines[header_idx + 1].strip().split()
             
+            # [수정] 중복된 컬럼 이름 처리 로직 추가
             columns = []
+            counts = {}
             for col, unit in zip(raw_cols, raw_units):
-                columns.append(f"{col}_{unit}")
-
+                base_name = f"{col}_{unit}"
+                if base_name in counts:
+                    counts[base_name] += 1
+                    # 중복 발생 시, 이름 뒤에 _2, _3, ... 와 같이 번호를 붙여 고유하게 만듭니다.
+                    unique_name = f"{base_name}_{counts[base_name]}"
+                else:
+                    counts[base_name] = 1
+                    unique_name = base_name
+                
+                columns.append(unique_name)
+                
             # 데이터프레임 빌드
             df = pd.read_csv(file_path, skiprows=header_idx+2, sep=r'\s+', names=columns, header=None)
 
@@ -780,6 +797,3 @@ class PlotTab(QWidget):
                 
                 # 3. 우측 Matplotlib 차트 화면도 지워진 데이터를 즉시 반영하여 새로고침
                 self.update_plot()
-
-
-

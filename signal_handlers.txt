@@ -1,0 +1,75 @@
+# ─── ProcessQueueManager 시그널 핸들러 ───
+    
+    def _on_queue_item_added(self, item):
+        """큐에 새 아이템 추가 시 UI 트리에 추가"""
+        qt_item = QTreeWidgetItem([os.path.basename(item.path), "Pending", "", ""])
+        qt_item.setData(0, Qt.UserRole, item.path)
+        qt_item.setData(1, Qt.UserRole, item.status)
+        self._apply_status_style(qt_item, item.status)
+        self.process_tree.addTopLevelItem(qt_item)
+        item.qt_item = qt_item  # 역참조 저장
+    
+    def _on_queue_item_updated(self, item):
+        """큐 아이템 상태 변경 시 UI 업데이트"""
+        qt_item = getattr(item, 'qt_item', None)
+        if qt_item:
+            self._apply_status_style(qt_item, item.status)
+            if item.start_time:
+                qt_item.setText(2, item.start_time)
+            if item.end_time:
+                qt_item.setText(3, item.end_time)
+    
+    def _on_queue_item_removed(self, item):
+        """큐에서 아이템 제거 시 UI에서 제거"""
+        qt_item = getattr(item, 'qt_item', None)
+        if qt_item:
+            row = self.process_tree.indexOfTopLevelItem(qt_item)
+            if row != -1:
+                self.process_tree.takeTopLevelItem(row)
+    
+    def _on_queue_log_received(self, file_path: str, data: str):
+        """로그 수신 시 process_logs 업데이트"""
+        if file_path not in self.process_logs:
+            self.process_logs[file_path] = ""
+        self.process_logs[file_path] += data
+        
+        # 현재 보고 있는 파일이면 cmd_output에 출력
+        if getattr(self, 'current_viewing_path', '') == file_path:
+            if hasattr(self, 'cmd_output'):
+                self.cmd_output.append(data)
+                self.cmd_output.moveCursor(QtGui.QTextCursor.End)
+    
+    def _on_queue_progress_updated(self, file_path: str, percent: int):
+        """진행률 업데이트 시 Finish 컬럼에 표시"""
+        item = self._find_qt_item_by_path(file_path)
+        if item and item.data(1, Qt.UserRole) == PROCESS_TREE_STATUS_RUNNING:
+            item.setText(3, f"{percent}%")
+    
+    def _on_queue_buttons_update(self):
+        """버튼 상태 업데이트 요청"""
+        self.process_tree_on_item_selection_changed()
+    
+    def _find_qt_item_by_path(self, file_path: str):
+        """경로로 QTreeWidgetItem 찾기"""
+        for i in range(self.process_tree.topLevelItemCount()):
+            item = self.process_tree.topLevelItem(i)
+            if item and item.data(0, Qt.UserRole) == file_path:
+                return item
+        return None
+    
+    def _apply_status_style(self, item, status):
+        """아이템에 상태별 스타일 적용"""
+        colors = {
+            PROCESS_TREE_STATUS_PENDING:   {"bg": "#FFFFFF", "fg": "#000000", "text": "Pending"},
+            PROCESS_TREE_STATUS_RUNNING:   {"bg": "#DCFCE7", "fg": "#000000", "text": "Running"},
+            PROCESS_TREE_STATUS_COMPLETED: {"bg": "#D1D5DB", "fg": "#000000", "text": "Completed"},
+            PROCESS_TREE_STATUS_STOP:      {"bg": "#D1D5DB", "fg": "#000000", "text": "Stopped"},
+            PROCESS_TREE_STATUS_ERROR:     {"bg": "#D1D5DB", "fg": "#EF4444", "text": "Error"},
+        }
+        style = colors.get(status)
+        if not style:
+            return
+        for col in range(4):
+            item.setBackground(col, QBrush(QColor(style["bg"])))
+            item.setForeground(col, QBrush(QColor(style["fg"])))
+        item.setText(1, style["text"])

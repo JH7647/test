@@ -1,0 +1,52 @@
+def btn_left_run_clicked(self, checked=False):
+    """선택된 .fst 파일 -> queue_mgr.add_file() 호출 (Error/완료 파일 재실행 가능)"""
+    selected = self.dir_tree.selectedIndexes()
+    if not selected:
+        print("[Run] 선택된 항목이 없습니다.")
+        return
+    
+    # 기존 큐 아이템들에서 경로 수집
+    existing_paths = set()
+    error_items = {}  # {file_path: QueueItem} - 재실행 가능한 Error/Completed 상태
+    
+    for q_item in self.queue_mgr.get_all_items():
+        existing_paths.add(q_item.path)
+        if q_item.status in (PROCESS_TREE_STATUS_ERROR, PROCESS_TREE_STATUS_COMPLETED):
+            error_items[q_item.path] = q_item
+    
+    for index in selected:
+        item = self.dir_tree_model.itemFromIndex(index)
+        if not item:
+            continue
+        file_path = item.data(Qt.UserRole)
+        
+        # Error/Completed 상태면 기존 항목 제거 후 재실행
+        if file_path in existing_paths and file_path in error_items:
+            old_qitem = error_items[file_path]
+            self.queue_mgr.remove_item(old_qitem)
+        
+        # 일반 중복 방지 (Pending/Running 상태면 스킵)
+        if file_path in existing_paths:
+            continue
+        
+        # 큐에 추가 -> 자동 실행 시작
+        self.queue_mgr.add_file(file_path)
+
+def btn_left_stop_clicked(self, checked=False):
+    """선택된 실행중/대기중 항목 중단/제거"""
+    selected_items = self.process_tree.selectedItems()
+    if not selected_items:
+        return
+    
+    for qt_item in selected_items:
+        file_path = qt_item.data(0, Qt.UserRole)
+        q_item = self.queue_mgr._find_item(file_path)
+        if q_item:
+            if q_item.status == PROCESS_TREE_STATUS_RUNNING:
+                self.queue_mgr.stop_item(q_item)
+            else:
+                self.queue_mgr.remove_item(q_item)
+
+def process_tree_add_to_pending(self, file_path):
+    """DEPRECATED: queue_mgr.add_file() 사용"""
+    self.queue_mgr.add_file(file_path)

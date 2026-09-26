@@ -1,0 +1,1 @@
+'file_path}")\n            print(f"📝 [변경 내용]: {updated_data}")\n            return True\n\n        except Exception as e:\n            print(f"❌ [저장 실패] 파일: {file_path}, 오류: {e}")\n            return False\n\n'
