@@ -10,7 +10,7 @@ import openpyxl
 import re
 
 from datetime import datetime
-from logging import config
+# from logging import config
 
 from PySide6.QtWidgets import QMessageBox, QFileDialog, QDialog, QCheckBox
 from PySide6.QtCore import QDir, QPoint, Qt, QSettings, QProcess
@@ -22,6 +22,9 @@ from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox, QWidget, Q
 
 from src.core.openfast_io import OpenFastIO  
 from src.core.process_queue import ProcessQueueManager
+from src.core.process_queue import ProcessQueueManager, PROCESS_TREE_STATUS_PENDING, PROCESS_TREE_STATUS_RUNNING, PROCESS_TREE_STATUS_COMPLETED, PROCESS_TREE_STATUS_STOP, PROCESS_TREE_STATUS_ERROR
+
+
 
 PROGRESS_RE = re.compile(r"Time:\s*(\d+)\s+of\s+(\d+)\s+seconds[^\r\n]*")
 
@@ -65,7 +68,7 @@ class FilesTab(QWidget):
 
         main_layout.addWidget(self.main_splitter)
 
-# region : [LEFT SIDE] 세로 Splitter로 분할 ============================================================
+# region : [LEFT SIDE] 세로 Splitter로 분할 ==============================================================================================================================================================
         left_vsplitter = QSplitter(Qt.Vertical)
 
         # 상단: 디렉토리 버튼 + 파일 트리
@@ -108,7 +111,7 @@ class FilesTab(QWidget):
         fst_list_widget = QWidget()
         fst_list_layout = QVBoxLayout(fst_list_widget)
         fst_list_layout.setContentsMargins(0,0,0,0)
-        fst_list_layout.setSpacing(5)
+        # fst_list_layout.setSpacing(5)
 
         # --- 파일 타입 필터 체크박스 (한 줄에 배치) ---
         filter_layout = QHBoxLayout()
@@ -188,8 +191,8 @@ class FilesTab(QWidget):
         process_header_layout.addStretch() 
         
         # 🚀 Run 버튼 (너비 및 디자인 유지)
-        self.btn_left_run = QPushButton("🚀 Run")
-        self.btn_left_run.setFixedWidth(120)     
+        self.btn_left_run = QPushButton(" 🚀 Run ")
+        # self.btn_left_run.setFixedWidth(120)     
         self.btn_left_run.setMinimumHeight(30)   
         self.btn_left_run.setStyleSheet("""
             QPushButton {
@@ -208,13 +211,11 @@ class FilesTab(QWidget):
         """)
         self.btn_left_run.clicked.connect(self.btn_left_run_clicked)
         process_header_layout.addWidget(self.btn_left_run)
-        
-        # 💡 두 버튼 사이의 간격을 10px 만큼 확실하게 띄워줌
-        process_header_layout.addSpacing(25)
+        process_header_layout.addSpacing(20)
         
         # 🛑 Stop 버튼 (너비 및 디자인 유지)
-        self.btn_left_stop = QPushButton("🛑 Stop")
-        self.btn_left_stop.setFixedWidth(120)     
+        self.btn_left_stop = QPushButton(" 🛑 Stop ")
+        # self.btn_left_stop.setFixedWidth(120)     
         self.btn_left_stop.setMinimumHeight(30)   
         self.btn_left_stop.setStyleSheet("""
             QPushButton {
@@ -231,7 +232,7 @@ class FilesTab(QWidget):
                 border-color: #FCA5A5;
             }
         """)
-        self.btn_left_stop.setEnabled(False)  # 초기에는 비활성화 상태로 시작
+        self.btn_left_stop.setEnabled(False)  
         process_header_layout.addWidget(self.btn_left_stop)
         left_bottom_layout.addLayout(process_header_layout)
 
@@ -296,9 +297,9 @@ class FilesTab(QWidget):
 
         self.main_splitter.addWidget(left_vsplitter)
 
-# endregion : ========================================================================================
+# endregion : ==========================================================================================================================================================================================
 
-# region : [RIGHT SIDE] 파일 경로 상세 정보 및 실행 로그 제어 영역 =========================================
+# region : [RIGHT SIDE] 파일 경로 상세 정보 및 실행 로그 제어 영역 ===========================================================================================================================================
         right_vsplitter = QSplitter(Qt.Vertical)
         right_vsplitter.setChildrenCollapsible(False)
 
@@ -382,8 +383,8 @@ class FilesTab(QWidget):
         right_vsplitter.setSizes([500, 500])
         
         self.main_splitter.addWidget(right_vsplitter)
-        self.main_splitter.setSizes([500, 500])
-# endregion : =============================================================================================================
+        self.main_splitter.setSizes([400, 600])
+# endregion : =====================================================================================================================================================================================
 
         self.on_tab_enter()  # 탭 진입 시 UI 초기화
 
@@ -404,7 +405,7 @@ class FilesTab(QWidget):
                     self.dir_explorer_tree.setCurrentIndex(index)
                     self.dir_explorer_tree.scrollTo(index, QAbstractItemView.PositionAtTop)
 
-            print(f"[DEBUG] on_tab_enter: last_fst_path={last_fst_path}, displayed_files={self.displayed_files}")
+            # print(f"[DEBUG] on_tab_enter: last_fst_path={last_fst_path}, displayed_files={self.displayed_files}")
 
     def on_dir_explorer_selected(self, selected, deselected):
         """디렉토리 탐색기에서 디렉토리 선택 시 .fst 목록 업데이트"""
@@ -763,6 +764,7 @@ class FilesTab(QWidget):
                 OpenFastIO.current_config = OpenFastIO.read_file(current_main, OpenFastIO.current_config)
                 self.model_tree_update(current_main)
 
+#=================================================================================================================================================================================================
 
 
     def model_tree_update(self, fst_file_paths):
@@ -868,7 +870,7 @@ class FilesTab(QWidget):
                         child.setEditable(False)
                         ae_item.appendRow(child)
 
-                af_lists = config.get("AFFileList", {}).get("current", [])
+                af_lists = current_config.get("AFFileList", {}).get("current", [])
                 if isinstance(af_lists, list):
                     for num, af_list in enumerate(af_lists, start=1):
                         child = QStandardItem(f"📝 Air Foil({num}) \t: {af_list}")
@@ -1886,7 +1888,7 @@ class FilesTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "실행 오류", f"Merger 실행 중 오류 발생:\n{e}")
 
-
+#=================================================================================================================================================================================================
 
 
     def btn_left_run_clicked(self, checked=False):
@@ -2595,7 +2597,7 @@ class FilesTab(QWidget):
             self.process_tree_move_to_completed(item, path, status, is_error=not success)
             self.process_tree.addTopLevelItem(item)
 
-#-------------------------------------------------------------------
+
 
     def _on_queue_item_added(self, item):
         """큐에 새 아이템 추가 시 UI 트리에 추가"""
@@ -2673,8 +2675,7 @@ class FilesTab(QWidget):
             item.setForeground(col, QBrush(QColor(style["fg"])))
         item.setText(1, style["text"])
 
-#-------------------------------------------------------------------
-
+#=================================================================================================================================================================================================
 
 
 
@@ -2683,3 +2684,5 @@ class FilesTab(QWidget):
         self.process_tree_save_run_queue()
         
         event.accept()
+
+#=================================================================================================================================================================================================
