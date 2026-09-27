@@ -8,8 +8,8 @@ import scipy.linalg as la
 import numpy as np
 import matplotlib.pyplot as plt
 
-sys.path.append(r"C:\TEST\OFA")
-sys.path.append(r"C:\TEST\OFA\src")
+sys.path.append(r"C:\TEST\WB")
+sys.path.append(r"C:\TEST\WB\src")
 
 from src.core.mode_bd import eig_A
 from openfast_toolbox.io.fast_linearization_file import FASTLinearizationFile

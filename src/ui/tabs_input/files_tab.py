@@ -493,22 +493,17 @@ class FilesTab(QWidget):
             
             if clicked_file_path and os.path.exists(clicked_file_path):
                 
-                # 궤적 추적용 파일 리스트가 클래스에 없다면 안전하게 생성
                 if not hasattr(self, 'displayed_files'):
                     self.displayed_files = []
 
-                    # # 레지스트리 세션 업데이트 with the first .fst file path
-                    # settings = QSettings("JHLEE", "OFA")
-                    # self.displayed_files[0] = settings.value("LastFstPath_fst", "", type=str) 
-
                 # Ctrl 키를 누른 상태에서 클릭한 경우
                 if bool(modifiers & Qt.ControlModifier):
-                    # 조건 3: 처음에 아무것도 표시되지 않은 상태였다면 -> 그냥 클릭한 파일만 표시
+                    # 조건 : 처음에 아무것도 표시되지 않은 상태였다면 -> 그냥 클릭한 파일만 표시
                     if not self.displayed_files:
                         self.displayed_files = [clicked_file_path]
                         print(f"⚡ [Ctrl + Click] 처음 상태 -> {clicked_file_path} 단독 추가")
                     
-                    # 조건 4: 이미 2개의 파일이 표시되어 있는 상태라면 -> 두번째 파일을 새 파일로 교체
+                    # 조건 : 이미 2개의 파일이 표시되어 있는 상태라면 -> 두번째 파일을 새 파일로 교체
                     elif len(self.displayed_files) >= 2:
                         print(f"⚡ [Ctrl + Click] 2개 포화 상태 -> 두번째 파일({self.displayed_files[1]})을 {clicked_file_path}로 교체")
                         self.displayed_files[1] = clicked_file_path
@@ -519,7 +514,7 @@ class FilesTab(QWidget):
                             self.displayed_files.append(clicked_file_path)
                             print(f"⚡ [Ctrl + Click] 두번째 파일 추가 -> {clicked_file_path}")
                 
-                # 그냥 클릭한 경우 (Ctrl 없이 일반 클릭)
+                # Ctrl 키를 누르지 않고 일반 클릭
                 else:
                     self.displayed_files = [clicked_file_path]
 
@@ -545,6 +540,7 @@ class FilesTab(QWidget):
                         font = item.font()
                         font.setBold(True)
                         loop_item.setFont(font)
+                        
                     # 대상이 아닌 과거의 파일인 경우 -> 깨끗하게 원상 복구!
                     else:
                         loop_item.setBackground(QBrush(Qt.GlobalColor.transparent))
@@ -552,16 +548,11 @@ class FilesTab(QWidget):
                         font = item.font()
                         font.setBold(False)
                         loop_item.setFont(font)
-
-                # # 3. 최신 세션 경로 변수 동기화 (가장 마지막에 선택된 타겟 보존)
-                # self.last_fst_path = clicked_file_path
                 
                 # 🎯 [우측 화면 동기화] model_tree에 최종 결정된 리스트 전달하여 업데이트 실행
                 if hasattr(self, 'model_tree_update'):
                     self.model_tree_update(self.displayed_files)
                 
-                # 🎯 [화면 즉시 리프레시] 윈도우 OS 그래픽 엔진 즉시 렌더링 강제 집행
-                QApplication.processEvents()
 
     def dir_tree_update(self, last_fst_path):
         """ 지정된 폴더 내부의 파일들을 필터에 맞춰 추출하여 좌측 리스트에 바인딩합니다. """
@@ -614,7 +605,7 @@ class FilesTab(QWidget):
             elif file_name.lower().endswith('.out'):
                 icon = "📊"
             elif file_name.lower().endswith('.lin'):
-                icon = "🛠️"
+                icon = "∿"
             else:
                 icon = "📄"
             
