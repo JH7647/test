@@ -1,6 +1,7 @@
 import os
 import copy
 import re
+import glob
 
 class OpenFastIO:
     """ OpenFAST 파일들의 실제 데이터를 가상으로 읽고 쓰는 엔진 """
@@ -47,6 +48,11 @@ class OpenFastIO:
         "IceFile":      {"default": "Ice.dat", "current": ""},
         "CompSoil":     {"default": "0", "current": ""},
         "SoilFile":     {"default": "Soil.dat", "current": ""},
+
+        "lin":          {"default": [], "current": []},
+        "chkp":         {"default": "", "current": ""},
+        "bin":          {"default": "", "current": ""},
+        "viz":          {"default": "", "current": ""},
     }
 
     _MODULE_MAP = [
@@ -148,50 +154,6 @@ class OpenFastIO:
         name = cls.current_config[file_key].get("current") or cls.current_config[file_key]["default"]
         return cls.get_absolute_path(base_path, name)
 
-    @classmethod
-    def update_config_from_fst(cls, fst_path):
-        """ .fst를 시작으로 연쇄 파싱을 수행하여 중앙 config만 완벽히 업데이트 """
-
-        cls.reset_config_to_defaults()
-        cls.current_config["MainFST"]["current"] = fst_path
-        cls.current_config = cls.read_file(fst_path, cls.current_config)
-
-        # ElastoDyn
-        comp_elast = cls._internal_val("CompElast")
-        if comp_elast in (1, 2):
-            ed_path = cls._resolve_path("EDFile", fst_path)
-            cls.current_config = cls.read_file(ed_path, cls.current_config)
-
-        # BeamDyn (+ 하위 BldFile)
-        if comp_elast == 2:
-            for num in range(1, 4):
-                bd_path = cls._resolve_path(f"BDBldFile({num})", ed_path)
-                cls.current_config = cls.read_file(bd_path, cls.current_config)
-                bld_path = cls._resolve_path("BldFile", bd_path)
-                cls.current_config = cls.read_file(bld_path, cls.current_config)
-
-        # AeroDyn
-        if cls._internal_val("CompAero") > 0:
-            ae_path = cls._resolve_path("AeroFile", fst_path)
-            cls.current_config = cls.read_file(ae_path, cls.current_config)
-
-        # ServoDyn (+ DLL)
-        if cls._internal_val("CompServo") > 0:
-            sv_path = cls._resolve_path("ServoFile", fst_path)
-            cls.current_config = cls.read_file(sv_path, cls.current_config)
-            dll_path = cls._resolve_path("DLL_FileName", sv_path)
-            cls.current_config = cls.read_file(dll_path, cls.current_config)
-
-        # 나머지 독립 모듈 (데이터 기반 루프)
-        for comp_key, file_key, _ in cls._MODULE_MAP:
-            if cls._internal_val(comp_key) > 0:
-                mod_path = cls._resolve_path(file_key, fst_path)
-                cls.current_config = cls.read_file(mod_path, cls.current_config)
-
-#        print(f" TwrFile = {cls.current_config['TwrFile']['current']}")
-
-        return cls.current_config
-
     @staticmethod
     def read_module_data(file_path):
         """ 파일을 읽어 UI 입력창에 뿌려줄 데이터를 평탄화된 딕셔너리로 변환 """
@@ -270,6 +232,83 @@ class OpenFastIO:
             print(f"❌ [저장 실패] 파일: {file_path}, 오류: {e}")
             return False
 
+
+    @classmethod
+    def update_config_from_fst(cls, fst_path):
+        """ .fst를 시작으로 연쇄 파싱을 수행하여 중앙 config만 완벽히 업데이트 """
+
+        cls.reset_config_to_defaults()
+        cls.current_config["MainFST"]["current"] = fst_path
+        cls.current_config = cls.read_file(fst_path, cls.current_config)
+
+        # ElastoDyn ------------------------------------------------------------------------------------------
+        comp_elast = cls._internal_val("CompElast")
+        if comp_elast in (1, 2):
+            ed_path = cls._resolve_path("EDFile", fst_path)
+            cls.current_config = cls.read_file(ed_path, cls.current_config)
+
+        # BeamDyn (+ 하위 BldFile) ----------------------------------------------------------------------------
+        if comp_elast == 2:
+            for num in range(1, 4):
+                bd_path = cls._resolve_path(f"BDBldFile({num})", ed_path)
+                cls.current_config = cls.read_file(bd_path, cls.current_config)
+                bld_path = cls._resolve_path("BldFile", bd_path)
+                cls.current_config = cls.read_file(bld_path, cls.current_config)
+
+        # AeroDyn --------------------------------------------------------------------------------------------
+        if cls._internal_val("CompAero") > 0:
+            ae_path = cls._resolve_path("AeroFile", fst_path)
+            cls.current_config = cls.read_file(ae_path, cls.current_config)
+
+        # ServoDyn (+ DLL) -----------------------------------------------------------------------------------
+        if cls._internal_val("CompServo") > 0:
+            sv_path = cls._resolve_path("ServoFile", fst_path)
+            cls.current_config = cls.read_file(sv_path, cls.current_config)
+            dll_path = cls._resolve_path("DLL_FileName", sv_path)
+            cls.current_config = cls.read_file(dll_path, cls.current_config)
+
+        # 나머지 독립 모듈 (데이터 기반 루프) --------------------------------------------------------------------
+        for comp_key, file_key, _ in cls._MODULE_MAP:
+            if cls._internal_val(comp_key) > 0:
+                mod_path = cls._resolve_path(file_key, fst_path)
+                cls.current_config = cls.read_file(mod_path, cls.current_config)
+
+        # Linearization 결과 파일들 추가 -----------------------------------------------------------------------
+        fst_dir = os.path.dirname(fst_path)
+        fst_basename = os.path.splitext(os.path.basename(fst_path))[0]
+
+        key   = "chkp"
+        fname = f"{fst_basename}.ModeShapeVTK.{key}"
+        fname = os.path.join(fst_dir, fname)
+        if os.path.exists(fname):
+            cls.current_config[key]["current"] = fname.replace(os.sep, '/')
+
+        key   = "lin"
+        fname = f"{fst_basename}.*.{key}"
+        lin_pattern = os.path.join(fst_dir, fname)
+        lin_files = sorted(glob.glob(lin_pattern))
+        if lin_files:
+            cls.current_config[key]["current"] = [f.replace(os.sep, '/') for f in lin_files]
+
+        key   = "bin"
+        fname = f"{fst_basename}.*.{key}"
+        lin_pattern = os.path.join(fst_dir, fname)
+        lin_files = sorted(glob.glob(lin_pattern))
+        if lin_files:
+            cls.current_config[key]["current"] = [f.replace(os.sep, '/') for f in lin_files]
+
+        key   = "viz"
+        fname = f"{fst_basename}.*.{key}"
+        lin_pattern = os.path.join(fst_dir, fname)
+        lin_files = sorted(glob.glob(lin_pattern))
+        if lin_files:
+            cls.current_config[key]["current"] = [f.replace(os.sep, '/') for f in lin_files]
+
+        # print(f"update_config_from_fst = {cls.current_config}")
+
+        return cls.current_config
+
+
     @classmethod
     def get_model_tree_data(cls, fst_paths: list[str]) -> list[dict]:
         """ 
@@ -294,12 +333,13 @@ class OpenFastIO:
 
     @classmethod
     def _build_single_tree_data(cls, fst_path: str) -> dict:
+        """ 단일 .fst 파일에 대한 current_config 입력"""
         config = cls.update_config_from_fst(fst_path)
         root = {"name": os.path.basename(fst_path), "path": fst_path, "children": [], "is_root": True}
         
-        gv = lambda k: config.get(k, {}).get("current") or config.get(k, {}).get("default", "")
-        iv = lambda k: int(gv(k) or 0)
-        ap = lambda base, rel: cls.get_absolute_path(base, rel) if rel else ""
+        gv = lambda k: config.get(k, {}).get("current") or config.get(k, {}).get("default", "")   # config에서 k 해당하는 값을 찾되, 사용자가 변경한 현재 설정값(current)을 최우선으로 가져오고, 없으면 default을 가져오는 함수
+        iv = lambda k: int(gv(k) or 0)                                                            # gv(k)설정값을 정수(int) 형태로 변환해 주는 함수
+        ap = lambda base, rel: cls.get_absolute_path(base, rel) if rel else ""                    # 상대 경로로 지정된 파일이나 아이콘의 위치(rel)를 프로젝트 기준의 완전한 절대 경로로 만들어주는 함수
         
         # ── ElastoDyn / BeamDyn ──
         comp_elast = iv("CompElast")
@@ -350,9 +390,39 @@ class OpenFastIO:
             if iv(comp_key) > 0:
                 mod_path = ap(fst_path, gv(file_key))
                 root["children"].append(cls._make_node(display, mod_path))
-        
-        return root
 
+        # ── 추가 파일들 (lin, chkp, bin, viz) ──
+
+        modal_node = cls._make_node("Linearization", "bin/viz with lin -> VTKs with viz(bin/chkp)")
+
+        # chkp (단일 파일)
+        chkp = config.get("chkp", {}).get("current")
+        if chkp:
+            modal_node["children"].append(cls._make_node("chkp", chkp))
+
+        # lin 파일들 (여러 개)
+        lin_files = config.get("lin", {}).get("current", [])
+        if lin_files:     
+            for i, lin_path in enumerate(lin_files, 1):
+                modal_node["children"].append(cls._make_node(f"lin({i})", lin_path))
+            root["children"].append(modal_node)
+        
+        # bin 파일들 (여러 개)
+        bin_files = config.get("bin", {}).get("current", [])
+        if bin_files:
+            bin_node = cls._make_node("bins", "")
+            for i, bin_path in enumerate(bin_files, 1):
+                modal_node["children"].append(cls._make_node(f"bin({i})", bin_path))
+        
+        # viz 파일들 (여러 개)
+        viz_files = config.get("viz", {}).get("current", [])
+        if viz_files:
+            viz_node = cls._make_node("vizs", "")
+            for i, viz_path in enumerate(viz_files, 1):
+                modal_node["children"].append(cls._make_node(f"viz({i})", viz_path))
+
+        return root
+    
     @staticmethod
     def _make_node(name: str, path: str) -> dict:
         return {"name": name, "path": path, "children": []}

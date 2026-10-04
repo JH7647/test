@@ -8,116 +8,146 @@ import scipy.linalg as la
 import numpy as np
 import matplotlib.pyplot as plt
 
+
 sys.path.append(r"C:\TEST\WB")
 sys.path.append(r"C:\TEST\WB\src")
 
-from src.core.mode_bd import eig_A
 from openfast_toolbox.io.fast_linearization_file import FASTLinearizationFile
-from openfast_toolbox.linearization.mbc import fx_mbc3
+
 
 
 def mode_from_lin(lin_file):
-    print("\n==============================================")
+    print("==============================================")
     print(f"🚀 Executing eig_A for: {lin_file}")
+    print("==============================================")
 
-    eig_A(lin_file_path=lin_file)
-    print("\n==============================================")  
+    lin = FASTLinearizationFile(lin_file)
+    w, v = np.linalg.eig(lin['A'])
+    total_node_number = int(lin.nx/2)  # 1st node position = 0
 
-def mode_from_lin_mbc(lin_file):
-    # mbc3(Multi-Blade Coordinate) 변환 등이 내부적으로 처리됩니다.
-    print(lin_file)
+    freqs = np.abs(np.imag(w)) / (2 * np.pi)
+    dampings = -np.real(w) / np.abs(w)
+    state_desc = np.array(lin['x_info']['Description'])
 
-    mbc_data, mat_data = fx_mbc3([lin_file], verbose=False)
-    mbc_data, mat_data = fx_mbc3([lin_file], verbose=False, removeStatesPattern='^AD')
+    print(f"total_mode_number = {total_node_number}\n")
 
-    #print(mbc_data)
+    sort_idx = np.argsort(freqs)
+    print(f"{'No':<3} | {'Freq [Hz]':<10} | {'Damping':<10} | {'Dominant State'}\n{'-'*100}")
 
-    if 'eigSol' in mbc_data:
-        # 원본 코드에서 고유진동수(Hz)는 'NaturalFreqs_Hz' 배열에 저장됩니다
-        freqs_raw = mbc_data['eigSol']['NaturalFreqs_Hz']
+    count = 0
+    for idx in sort_idx:
+        f = freqs[idx]
         
-        # 1차원 배열로 평탄화(Flatten) 후 소수점 4자리 반올림 및 중복 제거
-        freqs = np.unique(np.round(freqs_raw.flatten(), 4))
+        # 강체 모드(0Hz) 무시
+        if f < 0.01: continue
         
-        # 0Hz 근처의 불필요한 강체 모드나 음수 성분 노이즈 제거
-        freqs = freqs[freqs > 0.001]
+        # 고유값 켤레쌍 중 양의 주파수 성분만 출력 (음수 주파수 파트 무시)
+        if w[idx].imag < 0: continue
 
-        print("\n======================================")
-        print(f" 🚀 *** MBC 변환 기반 최종 고유 진동수 결과")
-        print("======================================")
-        for idx, freq in enumerate(freqs):
-            print(f"  Mode {idx+1:02d} : {freq:.4f} Hz")
-        print("======================================\n")
+        # 가장 크게 움직이는 상태 변수 찾기
+        mag = np.abs(v[:, idx])
+        max_idx = np.argmax(mag)
+        max_desc = state_desc[max_idx]
         
-        # 아래쪽 점 그래프 플롯 코드에 전달하기 위한 데이터 리스트화
-        freqs_hz = freqs.tolist()
-    else:
-        print("⚠️ fx_mbc3 연산 결과 내부에 고유값 솔루션(eigSol) 데이터가 없습니다.")
-        freqs_hz = []
+        count += 1
+        print(f"{count:03d} | {f:10.4f} | {dampings[idx]:10.4f} | {max_desc}")
 
 
-    # ==============================================================================
-    # 💡 [진단 데이터 반영 완료] 모드 셰입 및 주요 자유도(DOF) 기여도 분석 (최종판)
-    # ==============================================================================
-    print("\n🎨 각 모드별 형태(Mode Shape) 및 주요 자유도(DOF) 기여도 분석")
-    print("========================================================================")
+# def mode_from_lin_mbc(lin_file):
+#     # mbc3(Multi-Blade Coordinate) 변환 등이 내부적으로 처리됩니다.
+#     print(lin_file)
+
+#     mbc_data, mat_data = fx_mbc3([lin_file], verbose=False)
+#     mbc_data, mat_data = fx_mbc3([lin_file], verbose=False, removeStatesPattern='^AD')
+
+#     #print(mbc_data)
+
+#     if 'eigSol' in mbc_data:
+#         # 원본 코드에서 고유진동수(Hz)는 'NaturalFreqs_Hz' 배열에 저장됩니다
+#         freqs_raw = mbc_data['eigSol']['NaturalFreqs_Hz']
+        
+#         # 1차원 배열로 평탄화(Flatten) 후 소수점 4자리 반올림 및 중복 제거
+#         freqs = np.unique(np.round(freqs_raw.flatten(), 4))
+        
+#         # 0Hz 근처의 불필요한 강체 모드나 음수 성분 노이즈 제거
+#         freqs = freqs[freqs > 0.001]
+
+#         print("\n======================================")
+#         print(f" 🚀 *** MBC 변환 기반 최종 고유 진동수 결과")
+#         print("======================================")
+#         for idx, freq in enumerate(freqs):
+#             print(f"  Mode {idx+1:02d} : {freq:.4f} Hz")
+#         print("======================================\n")
+        
+#         # 아래쪽 점 그래프 플롯 코드에 전달하기 위한 데이터 리스트화
+#         freqs_hz = freqs.tolist()
+#     else:
+#         print("⚠️ fx_mbc3 연산 결과 내부에 고유값 솔루션(eigSol) 데이터가 없습니다.")
+#         freqs_hz = []
+
+
+#     # ==============================================================================
+#     # 💡 [진단 데이터 반영 완료] 모드 셰입 및 주요 자유도(DOF) 기여도 분석 (최종판)
+#     # ==============================================================================
+#     print("\n🎨 각 모드별 형태(Mode Shape) 및 주요 자유도(DOF) 기여도 분석")
+#     print("========================================================================")
     
-    # 1. 진단된 키 목록을 바탕으로 고유벡터(rv)와 상태이름(states_names)을 조준 타격합니다.
-    rv = mbc_data['eigSol']['EigenVects']
-    states_names = mbc_data['DescStates']
+#     # 1. 진단된 키 목록을 바탕으로 고유벡터(rv)와 상태이름(states_names)을 조준 타격합니다.
+#     rv = mbc_data['eigSol']['EigenVects']
+#     states_names = mbc_data['DescStates']
     
-    # 2. 원본 복소수 고유값에서 주파수 성분 추출 ('NaturalFreqs_Hz' 활용)
-    raw_freqs = mbc_data['eigSol']['NaturalFreqs_Hz']
+#     # 2. 원본 복소수 고유값에서 주파수 성분 추출 ('NaturalFreqs_Hz' 활용)
+#     raw_freqs = mbc_data['eigSol']['NaturalFreqs_Hz']
     
-    # 1차원 평탄화된 주파수 개수만큼 분석 (최대 6개 모드로 제한)
-    num_modes_to_show = min(len(freqs), 6)
+#     # 1차원 평탄화된 주파수 개수만큼 분석 (최대 6개 모드로 제한)
+#     num_modes_to_show = min(len(freqs), 6)
     
-    for idx in range(num_modes_to_show):
-        target_freq = freqs[idx]
+#     for idx in range(num_modes_to_show):
+#         target_freq = freqs[idx]
         
-        # 출력된 정렬 주파수와 원본 인덱스 매칭 (오차 허용치 0.005)
-        # 1차원/2차원 배열 구조 방어 코드 적용
-        flat_raw_freqs = raw_freqs.flatten()
-        matched_indices = np.where(np.abs(flat_raw_freqs - target_freq) < 0.005)[0]
+#         # 출력된 정렬 주파수와 원본 인덱스 매칭 (오차 허용치 0.005)
+#         # 1차원/2차원 배열 구조 방어 코드 적용
+#         flat_raw_freqs = raw_freqs.flatten()
+#         matched_indices = np.where(np.abs(flat_raw_freqs - target_freq) < 0.005)[0]
         
-        if len(matched_indices) == 0:
-            continue
-        mode_idx = matched_indices[0] # 첫 번째 매칭 인덱스 선택
+#         if len(matched_indices) == 0:
+#             continue
+#         mode_idx = matched_indices[0] # 첫 번째 매칭 인덱스 선택
         
-        # 복소수 고유벡터 행렬에서 해당 모드의 크기(진폭) 계산
-        # rv 구조: [상태 개수, 모드 개수]
-        if rv.ndim == 2 and mode_idx < rv.shape[1]:
-            mode_shape_vector = np.abs(rv[:, mode_idx])
-        else:
-            continue
+#         # 복소수 고유벡터 행렬에서 해당 모드의 크기(진폭) 계산
+#         # rv 구조: [상태 개수, 모드 개수]
+#         if rv.ndim == 2 and mode_idx < rv.shape[1]:
+#             mode_shape_vector = np.abs(rv[:, mode_idx])
+#         else:
+#             continue
         
-        # 진폭이 가장 큰 상위 2개의 상태 변수(자유도) 인덱스 추출
-        top_dof_indices = np.argsort(mode_shape_vector)[::-1][:2]
+#         # 진폭이 가장 큰 상위 2개의 상태 변수(자유도) 인덱스 추출
+#         top_dof_indices = np.argsort(mode_shape_vector)[::-1][:2]
         
-        print(f" 📌 Mode {idx+1:02d} ({target_freq:.4f} Hz) 의 주요 거동 성분:")
+#         print(f" 📌 Mode {idx+1:02d} ({target_freq:.4f} Hz) 의 주요 거동 성분:")
         
-        for rank, dof_i in enumerate(top_dof_indices):
-            if dof_i < len(states_names):
-                dof_name = states_names[dof_i]
+#         for rank, dof_i in enumerate(top_dof_indices):
+#             if dof_i < len(states_names):
+#                 dof_name = states_names[dof_i]
                 
-                # 문자열 타입 예외 처리
-                if isinstance(dof_name, bytes):
-                    dof_name = dof_name.decode('utf-8')
+#                 # 문자열 타입 예외 처리
+#                 if isinstance(dof_name, bytes):
+#                     dof_name = dof_name.decode('utf-8')
                 
-                # 공백 제거 및 문자열 변환
-                dof_name = str(dof_name).strip()
+#                 # 공백 제거 및 문자열 변환
+#                 dof_name = str(dof_name).strip()
                 
-                magnitude = mode_shape_vector[dof_i]
-                max_val = np.max(mode_shape_vector)
-                rel_pct = (magnitude / max_val) * 100 if max_val > 0 else 0
+#                 magnitude = mode_shape_vector[dof_i]
+#                 max_val = np.max(mode_shape_vector)
+#                 rel_pct = (magnitude / max_val) * 100 if max_val > 0 else 0
                 
-                print(f"   [{rank+1}순위 DOF] {dof_name:<50s} -> 기여도: {rel_pct:5.1f}%")
-            else:
-                print(f"   [{rank+1}순위 DOF] Unknown DOF Index ({dof_i})")
-        print("-" * 72)
+#                 print(f"   [{rank+1}순위 DOF] {dof_name:<50s} -> 기여도: {rel_pct:5.1f}%")
+#             else:
+#                 print(f"   [{rank+1}순위 DOF] Unknown DOF Index ({dof_i})")
+#         print("-" * 72)
         
-    print("========================================================================\n")
-    # ==============================================================================
+#     print("========================================================================\n")
+#     # ==============================================================================
 
 
 # ==============================================================================
@@ -606,78 +636,78 @@ def fx_mbc3(FileNames, ModeVizFileName):
 # ==============================================================================
 
 
-#=======================================================================================================================
-print("📢 [실시간 반영] Apply 버튼이 클릭되었습니다!")
+# #=======================================================================================================================
+# print("📢 [실시간 반영] Apply 버튼이 클릭되었습니다!")
 
-file_info = globals().get('file_path', 'No files')
+# file_info = globals().get('file_path', 'No files')
 
-if file_info == 'No files' or not file_info:
-    file_info = r"C:/TEST/oFAST/_3MW/3_sd_260427(TwrED)\Main_SD.2.lin" 
-    print(f"⚠️ 전달된 주소가 없어 기본 파일로 대체합니다: {file_info}")
+# if file_info == 'No files' or not file_info:
+#     file_info = r"C:/TEST/oFAST/_3MW/3_sd_260427(TwrED)\Main_SD.2.lin" 
+#     print(f"⚠️ 전달된 주소가 없어 기본 파일로 대체합니다: {file_info}")
 
-mode_from_lin(file_info)
-#mode_from_lin_mbc(file_info)
-#=======================================================================================================================
+# mode_from_lin(file_info)
+# #mode_from_lin_mbc(file_info)
+# #=======================================================================================================================
 
-file_dir = os.path.dirname(file_info) 
-file_name = os.path.basename(file_info)
-prefix = file_name.rsplit('.', 1)[0] + '.'
-prefix_chp = file_name.split('.', 1)[0] + '.' 
+# file_dir = os.path.dirname(file_info) 
+# file_name = os.path.basename(file_info)
+# prefix = file_name.rsplit('.', 1)[0] + '.'
+# prefix_chp = file_name.split('.', 1)[0] + '.' 
 
-lin_file = FASTLinearizationFile(file_info)
+# lin_file = FASTLinearizationFile(file_info)
 
-print("📋 [확인 단계] 현재 설치된 라이브러리 내부 속성 목록:")
-print([attr for attr in dir(lin_file) if not attr.startswith('__')])
+# print("📋 [확인 단계] 현재 설치된 라이브러리 내부 속성 목록:")
+# print([attr for attr in dir(lin_file) if not attr.startswith('__')])
 
-chp_out_name = os.path.join(file_dir, f"{prefix_chp}ModeShapeVTK")
-bin_out_name = os.path.join(file_dir, f"{prefix}ModeShapeVTK.bin")
-viz_out_name = os.path.join(file_dir, f"{prefix}ModeShapeVTK.viz")
+# chp_out_name = os.path.join(file_dir, f"{prefix_chp}ModeShapeVTK")
+# bin_out_name = os.path.join(file_dir, f"{prefix}ModeShapeVTK.bin")
+# viz_out_name = os.path.join(file_dir, f"{prefix}ModeShapeVTK.viz")
 
-MBC, matData = fx_mbc3([file_info], bin_out_name)
-nModes = len(MBC['eigSol']['NaturalFreqs_Hz'])
-modes_str = ','.join(str(i) for i in range(1, nModes + 1))
+# MBC, matData = fx_mbc3([file_info], bin_out_name)
+# nModes = len(MBC['eigSol']['NaturalFreqs_Hz'])
+# modes_str = ','.join(str(i) for i in range(1, nModes + 1))
 
-viz_content = (
-    "------- OpenFAST MODE-SHAPE INPUT FILE -------------------------------------------\n"
-    "# Options for visualizing mode shapes\n"
-    "---------------------- FILE NAMES ----------------------------------------------\n"
-    f'"{os.path.basename(chp_out_name)}"   CheckpointRoot - Rootname of the checkpoint file\n'
-    f'"{os.path.basename(bin_out_name)}"   ModesFileName - Name of the mode-shape file\n'
-    "---------------------- VISUALIZATION OPTIONS -----------------------------------\n"
-    f"{nModes}        VTKLinModes   - Number of modes to visualize\n"
-    f"{modes_str}        VTKModes      - List of modes\n"
-    "1        VTKLinScale   - Mode shape visualization scaling factor\n"
-    "2          VTKLinTim     - Switch to make one animation\n"
-    "true       VTKLinTimes1  - Visualize modes at LinTimes(1) only\n"
-    "0.0        VTKLinPhase   - Phase\n")
-with open(viz_out_name, 'w', encoding='utf-8') as f_viz:
-    f_viz.write(viz_content)
-print(f"Written:    {viz_out_name}")
-print("\n🎉 [최종 통과] 모든 복소 차원 오류가 해결되었으며 연산이 성공적으로 완결되었습니다!")
+# viz_content = (
+#     "------- OpenFAST MODE-SHAPE INPUT FILE -------------------------------------------\n"
+#     "# Options for visualizing mode shapes\n"
+#     "---------------------- FILE NAMES ----------------------------------------------\n"
+#     f'"{os.path.basename(chp_out_name)}"   CheckpointRoot - Rootname of the checkpoint file\n'
+#     f'"{os.path.basename(bin_out_name)}"   ModesFileName - Name of the mode-shape file\n'
+#     "---------------------- VISUALIZATION OPTIONS -----------------------------------\n"
+#     f"{nModes}        VTKLinModes   - Number of modes to visualize\n"
+#     f"{modes_str}        VTKModes      - List of modes\n"
+#     "1        VTKLinScale   - Mode shape visualization scaling factor\n"
+#     "2          VTKLinTim     - Switch to make one animation\n"
+#     "true       VTKLinTimes1  - Visualize modes at LinTimes(1) only\n"
+#     "0.0        VTKLinPhase   - Phase\n")
+# with open(viz_out_name, 'w', encoding='utf-8') as f_viz:
+#     f_viz.write(viz_content)
+# print(f"Written:    {viz_out_name}")
+# print("\n🎉 [최종 통과] 모든 복소 차원 오류가 해결되었으며 연산이 성공적으로 완결되었습니다!")
 
 
-import subprocess
-import os
+# import subprocess
+# import os
 
-print(f"🚀 OpenFAST 시작: {viz_out_name}")
+# print(f"🚀 OpenFAST 시작: {viz_out_name}")
 
-openfast_exe = r"C:\Users\jeong\Downloads\BU_openFAST\OpenFAST.exe"
-# subprocess.run([openfast_exe, "-VTKLin", viz_out_name], cwd=os.path.dirname(viz_out_name))
+# openfast_exe = r"C:\Users\jeong\Downloads\BU_openFAST\OpenFAST.exe"
+# # subprocess.run([openfast_exe, "-VTKLin", viz_out_name], cwd=os.path.dirname(viz_out_name))
 
-# creationflags=0x08000000 은 윈도우에서 CMD 창이 새로 뜨는 것을 방지합니다.
-process = subprocess.Popen(
-    [openfast_exe, "-VTKLin", viz_out_name],
-    cwd=os.path.dirname(viz_out_name),
-    stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT,
-    text=True,
-    encoding='utf-8',          # 글자가 깨지면 'cp949'로 변경해 보세요
-    creationflags=0x08000000   # CREATE_NO_WINDOW
-)
+# # creationflags=0x08000000 은 윈도우에서 CMD 창이 새로 뜨는 것을 방지합니다.
+# process = subprocess.Popen(
+#     [openfast_exe, "-VTKLin", viz_out_name],
+#     cwd=os.path.dirname(viz_out_name),
+#     stdout=subprocess.PIPE,
+#     stderr=subprocess.STDOUT,
+#     text=True,
+#     encoding='utf-8',          # 글자가 깨지면 'cp949'로 변경해 보세요
+#     creationflags=0x08000000   # CREATE_NO_WINDOW
+# )
 
-if process.stdout:
-    for line in process.stdout:
-        # file=sys.stdout을 명시하여 무조건 일반 출력 창으로 보냅니다.
-        print(line, end="", file=sys.stdout) 
+# if process.stdout:
+#     for line in process.stdout:
+#         # file=sys.stdout을 명시하여 무조건 일반 출력 창으로 보냅니다.
+#         print(line, end="", file=sys.stdout) 
 
-process.wait()
+# process.wait()

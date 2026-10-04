@@ -84,12 +84,11 @@ class MultiCaseRunWindow(QDialog):
         self.reload_excel(self.excel_path, keep_selection=False)
 
     @staticmethod
-    def show_window(parent, text):
-        """ 우클릭 참조 텍스트(text)에서 파일경로를 추출해 모달리스 창을 띄웁니다. """
-        file_path = text.split(":", 1)[1].strip() if ":" in text else text.strip()
-        if not os.path.exists(file_path):
+    def show_window(parent, file_path):
+        """ 파일 절대 경로를 받아 모달리스 창을 띄웁니다. """
+        if not file_path or not os.path.isabs(str(file_path)) or not os.path.exists(file_path):
             QMessageBox.warning(parent, "입력 파일 오류",
-                                 "실행할 파일이 경로에 존재하지 않습니다.\n\n경로: " + file_path)
+                                 "실행할 파일이 경로에 존재하지 않습니다.\n\n경로: " + str(file_path))
             return
 
         ref_dir = os.path.dirname(file_path)
