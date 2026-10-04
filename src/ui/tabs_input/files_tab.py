@@ -99,6 +99,20 @@ class FilesTab(QWidget):
         self.dir_explorer_tree.setModel(self.dir_model)
         self.dir_explorer_tree.setHeaderHidden(True)
         self.dir_explorer_tree.setIndentation(10) 
+        self.dir_explorer_tree.setStyleSheet("""
+            QTreeView {
+                border: 1px solid #E5E7EB;
+                background-color: #FFFFFF;
+                font-size: 12px;
+            }
+            QTreeView::viewport { background-color: #FFFFFF; }
+            QTreeView::item { padding: 3px 0px; }
+            QTreeView::item:selected {
+                background-color: #D1D5DB !important;
+                color: #374151 !important;
+                font-weight: bold;
+            }
+        """)
         for i in range(1, self.dir_model.columnCount()):
             self.dir_explorer_tree.hideColumn(i)
         
@@ -415,7 +429,7 @@ class FilesTab(QWidget):
         
         index = indexes[0]
         dir_path = self.dir_model.filePath(index)
-        print(f"[DEBUG] Explorer selected: dir_path={dir_path}")  # ← 이 줄 추가
+        print(f"[dir_explorer] Explorer selected: dir_path={dir_path}")  # ← 이 줄 추가
         
         if dir_path:
             self.dir_tree_update(dir_path)
@@ -558,7 +572,6 @@ class FilesTab(QWidget):
                 if hasattr(self, 'model_tree_update'):
                     self.model_tree_update(self.displayed_files)
                 
-
     def dir_tree_update(self, last_fst_path):
         """ 지정된 폴더 내부의 파일들을 필터에 맞춰 추출하여 좌측 리스트에 바인딩합니다. """
         self.dir_tree_model.clear()
@@ -634,49 +647,6 @@ class FilesTab(QWidget):
                 item.setFont(font)
 
             self.dir_tree_model.appendRow(item)
-
-        # 목록 갱신 직후 아무것도 선택되어 있지 않으면 .fst 항목을 자동 선택한다.
-        # (btn_left_run_clicked 가 self.dir_tree.selectedIndexes() 를 읽으므로 선택이 없으면
-        #  '[Run] 선택된 항목이 없습니다.' 로 종료된다. .fst 만 후보로 제한해 MainFST 오염 방지)
-        self._dir_tree_auto_select(getattr(self, 'last_fst_path', ''))
-
-    def _dir_tree_auto_select(self, prefer_path='', force=False):
-        """ dir_tree 에 자동 선택을 적용한다.
-            - 이미 사용자가 선택해 둔 항목이 있으면 건드리지 않는다 (force=False 일 때)
-            - prefer_path 와 일치하는 .fst 항목을 우선, 없으면 첫 번째 활성 .fst 항목 선택 """
-        if not force and self.dir_tree.selectionModel().selectedIndexes():
-            return False
-
-        want = (prefer_path or '').replace('\\', '/').lower()
-
-        target_row = -1
-        for r in range(self.dir_tree_model.rowCount()):
-            it = self.dir_tree_model.item(r)
-            if not it or not it.isEnabled():
-                continue
-
-            path = (it.data(Qt.UserRole) or '').replace('\\', '/')
-            if not path.lower().endswith('.fst'):
-                continue
-
-            if target_row < 0:
-                target_row = r
-
-            if want and path.lower() == want:
-                target_row = r
-                break
-
-        if target_row < 0:
-            return False
-
-        index = self.dir_tree_model.index(target_row, 0)
-        if not index.isValid():
-            return False
-
-        self.dir_tree.setCurrentIndex(index)
-        self.dir_tree.scrollTo(index)
-        self._apply_dir_tree_selection(index, Qt.NoModifier)
-        return True
 
     def on_file_filter_changed(self, state):
         """파일 필터 체크박스 변경 시 파일 리스트 즉시 갱신"""
@@ -836,9 +806,6 @@ class FilesTab(QWidget):
             root_index = self.model_tree_model.index(i, 0)
             if root_index.isValid():
                 self.model_tree.setExpanded(root_index, True)
-
-        # # 🔄 [개선] 파일 미설정 시 자동 클릭 효과 발생 → btn_run 사용 가능한 상태로 전환
-        # self._model_tree_auto_select()
 
         # 🔄 [개선] 표시 기준을 dir_tree 의 displayed_files 로 통일
         #    (이전 model_tree_displayed_files 가 남아 있으면 새 트리에 옛 파일이 계속 하이라이트된다)
@@ -1041,26 +1008,6 @@ class FilesTab(QWidget):
         ctrl = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
         self._select_file(clicked_file_path, ctrl=ctrl, uid=self._get_node_uid(index))
 
-    # def _model_tree_auto_select(self, row=0, force=False):
-    #     """
-    #     model_tree 갱신 시 자동으로 '클릭된 효과'를 발생시킨다.
-    #     → model_tree_displayed_files 등록 + 하이라이트 + btn_run 사용 가능 상태
-
-    #     force=False 이면 이미 선택된 파일이 있을 때 건드리지 않아
-    #     드래그&드롭 / 리로드로 트리가 갱신되어도 사용자 선택이 초기화되지 않는다.
-    #     """
-    #     if not force and getattr(self, 'model_tree_displayed_files', None):
-    #         return False
-
-    #     idx = self.model_tree_model.index(row, 0)
-    #     if not idx.isValid():
-    #         return False
-
-    #     self.model_tree.setCurrentIndex(idx)     # 네이티브 선택 표시(파란색)
-    #     self.model_tree.scrollTo(idx)            # 스크롤 자동 이동
-    #     self.model_tree_clicked(idx)             # 클릭과 동일한 효과
-    #     return True
-
     def _update_model_tree_highlight(self):
         """ model_tree 표시 대상 파일들 하이라이트 업데이트 """
         displayed = getattr(self, 'model_tree_displayed_files', None)
@@ -1128,6 +1075,7 @@ class FilesTab(QWidget):
         save_project_action      = QAction("💾 Project Files Deep 복사/저장하기", self)
         save_runfile_action      = QAction("💾 Project Files Soft 복사/저장하기", self)
         save_as_action           = QAction("📝 다른 이름으로 저장하기...", self)
+        delete_action            = QAction("❌ Delete File", self)
         compare_action           = QAction("🔀 Compare Two Files (Merger)", self)
         run_openfast_action      = QAction("▶️ OpenFAST 실행하기", self)
         run_linearization_action = QAction("▶️ Linearization 실행하기", self)
@@ -1140,6 +1088,7 @@ class FilesTab(QWidget):
         menu.addAction(save_project_action)
         menu.addAction(save_runfile_action)
         menu.addAction(save_as_action)
+        menu.addAction(delete_action)
         menu.addSeparator() # Separator line 
         menu.addAction(compare_action)
         menu.addSeparator() # Separator line
@@ -1157,7 +1106,8 @@ class FilesTab(QWidget):
         run_openfast_action.triggered.connect(     lambda: self.mouse_Rclick_run_openfast(index))
         run_linearization_action.triggered.connect(lambda: self.mouse_Rclick_run_linearization(index))
         run_multi_case_action.triggered.connect(   lambda: self.mouse_Rclick_run_multi_case(index))
-        
+        delete_action.triggered.connect(           lambda: self.mouse_Rclick_delete_file(index))
+
         menu.exec(self.model_tree.mapToGlobal(pos))  # 마우스가 클릭된 전역 좌표(화면 기준 주소)에 메뉴판 오픈
 
     def mouse_Rclick_open_directory(self, index):
@@ -1864,6 +1814,37 @@ class FilesTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "실행 오류", f"Merger 실행 중 오류 발생:\n{e}")
 
+    def mouse_Rclick_delete_file(self, index):
+        """ 선택된 파일을 삭제 후, 트리뷰에서 제거 """
+        clicked_file_path = self._get_clicked_file_path(index)
+        if not clicked_file_path:
+            return
+
+        if not os.path.exists(clicked_file_path):
+            QMessageBox.warning(self, "파일 없음", f"선택한 파일이 존재하지 않습니다.\n경로: {clicked_file_path}")
+            return
+
+        if not clicked_file_path.lower().endswith('.lin'):
+            QMessageBox.warning(self, "삭제 불가", f"선택한 파일은 .lin 파일이 아닙니다.\n경로: {clicked_file_path}")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "파일 삭제 확인",
+            f"정말로 선택한 파일을 삭제하시겠습니까?\n\n파일: {os.path.basename(clicked_file_path)}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            try:
+                os.remove(clicked_file_path)
+                print(f"[DELETE] 파일 삭제 완료: {clicked_file_path}")
+
+                # 트리뷰에서 해당 노드 제거
+                self.model_tree_update(OpenFastIO.current_config.get("MainFST", {}).get("current"))
+            except Exception as e:
+                QMessageBox.critical(self, "삭제 오류", f"파일 삭제 중 오류 발생:\n{e}")
 #=================================================================================================================================================================================================
 
 
