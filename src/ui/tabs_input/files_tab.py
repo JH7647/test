@@ -814,6 +814,8 @@ class FilesTab(QWidget):
             fst_file_paths = [fst_file_paths] if fst_file_paths else []
             
         if not fst_file_paths:
+            self.model_tree_displayed_files = []
+            self.model_tree_displayed_nodes = []
             return
 
         try:
@@ -823,9 +825,9 @@ class FilesTab(QWidget):
             self.cmd_output.append(f"❌ 모델 트리 데이터 생성 실패: {str(e)}\n")
             return
 
-        # 데이터 구조를 QStandardItemModel로 렌더링
-        for tree_data in tree_data_list:
-            self._render_tree_node(tree_data, self.model_tree_model)
+        # 데이터 구조를 QStandardItemModel로 렌더링 (루트별 고유 ID 부여)
+        for i, tree_data in enumerate(tree_data_list):
+            self._render_tree_node(tree_data, self.model_tree_model, str(i))
 
         # 트리 펼치기
         self.model_tree.setRootIsDecorated(True)
@@ -835,14 +837,21 @@ class FilesTab(QWidget):
             if root_index.isValid():
                 self.model_tree.setExpanded(root_index, True)
 
-        # 🔄 [개선] 파일 미설정 시 자동 클릭 효과 발생 → btn_run 사용 가능한 상태로 전환
-        self._model_tree_auto_select()
+        # # 🔄 [개선] 파일 미설정 시 자동 클릭 효과 발생 → btn_run 사용 가능한 상태로 전환
+        # self._model_tree_auto_select()
+
+        # 🔄 [개선] 표시 기준을 dir_tree 의 displayed_files 로 통일
+        #    (이전 model_tree_displayed_files 가 남아 있으면 새 트리에 옛 파일이 계속 하이라이트된다)
+        self.model_tree_displayed_files = [p for p in fst_file_paths if p]
+        self.model_tree_displayed_nodes = []      # 트리가 새로 그려졌으므로 노드 ID 선택은 초기화
 
         # 선택된 파일들 하이라이트 재적용
         self._update_model_tree_highlight()
 
-    def _render_tree_node(self, node_data: dict, parent_item):
-        """ 재귀적으로 트리 노드 렌더링 """
+    def _render_tree_node(self, node_data: dict, parent_item, uid_prefix="0"):
+        """ 재귀적으로 트리 노드 렌더링
+            uid_prefix : 노드 고유 ID(부모 경로 + 자식 인덱스).
+                         같은 파일을 가리키는 여러 노드(BldFile(1..3) 가 한 파일 등)를 구분하는 키. """
 
         # 노드 생성
         is_root = node_data.get("is_root", False)
@@ -854,6 +863,8 @@ class FilesTab(QWidget):
         item = QStandardItem(display_text)
         item.setEditable(False)
         item.setData(node_data['path'], Qt.UserRole)
+        item.setData(bool(is_root), Qt.UserRole + 1)   # 루트 표시용 (하이라이트 리셋 시 굵게 유지)
+        item.setData(uid_prefix, Qt.UserRole + 2)      # 노드 고유 ID (선택 판정용)
 
         if is_root:
             item.setFont(self._safe_font(item, True))
@@ -861,8 +872,16 @@ class FilesTab(QWidget):
         parent_item.appendRow(item)
 
         # 자식 노드들 재귀 처리
-        for child in node_data.get("children", []):
-            self._render_tree_node(child, item)
+        for i, child in enumerate(node_data.get("children", [])):
+            self._render_tree_node(child, item, f"{uid_prefix}.{i}")
+
+    @staticmethod
+    def _get_node_uid(index):
+        """ 인덱스에 해당하는 model_tree 노드의 고유 ID 추출 """
+        if not index or not index.isValid():
+            return ""
+        it = index.model().itemFromIndex(index) if hasattr(index, 'model') else None
+        return (it.data(Qt.UserRole + 2) or "") if it else ""
 
     def _get_clicked_file_path(self, index):
         """트리 아이템 인덱스로부터 유효한 파일 경로를 추출하는 공통 함수"""
@@ -962,36 +981,53 @@ class FilesTab(QWidget):
         else:
             QMessageBox.warning(self, "Error", "Files is not found & Please check whether the file exist.")
 
-    def _select_file(self, file_path, ctrl=False):
-        """ 파일 경로를 model_tree 선택 상태로 만드는 단일 진입점 (마우스 클릭 / 자동 선택 공용) """
+    def _select_file(self, file_path, ctrl=False, uid=""):
+        """ 노드를 선택 상태로 만드는 단일 진입점 (마우스 클릭 / 자동 선택 공용)
+            uid : 노드 고유 ID. 같은 파일을 가리키는 다른 노드(BldFile(1..3) 가 한 파일 등)와
+                  경로만으로 구분되지 않게 해 클릭한 노드 하나만 하이라이트되게 한다. """
         if not file_path:
             return False
 
-        # 궤적 추적용 파일 리스트가 클래스에 없다면 안전하게 생성
+        # 궤적 추적용 리스트가 클래스에 없다면 안전하게 생성
         if not hasattr(self, 'model_tree_displayed_files'):
             self.model_tree_displayed_files = []
+        if not hasattr(self, 'model_tree_displayed_nodes'):
+            self.model_tree_displayed_nodes = []
+
+        pairs = list(self.model_tree_displayed_nodes)      # [(uid, path), ...]
+        pair = (uid, file_path)
 
         if ctrl:
-            # 조건 : 처음에 아무것도 표시되지 않은 상태였다면 -> 그냥 클릭한 파일만 표시
-            if not self.model_tree_displayed_files:
-                self.model_tree_displayed_files = [file_path]
+            # 조건 : 처음에 아무것도 표시되지 않은 상태였다면 -> 그냥 클릭한 노드만 표시
+            if not pairs:
+                pairs = [pair]
                 print(f"[ACTION] [ModelTree Ctrl + Click] 처음 상태 -> {file_path} 단독 추가")
 
-            # 조건 : 이미 2개의 파일이 표시되어 있는 상태라면 -> 두번째 파일을 새 파일로 교체
-            elif len(self.model_tree_displayed_files) >= 2:
-                print(f"[ACTION] [ModelTree Ctrl + Click] 2개 포화 상태 -> 두번째 파일({self.model_tree_displayed_files[1]})을 {file_path}로 교체")
-                self.model_tree_displayed_files[1] = file_path
+            # 조건 : 이미 2개의 노드가 표시되어 있는 상태라면 -> 두번째 노드를 새 노드로 교체
+            elif len(pairs) >= 2:
+                print(f"[ACTION] [ModelTree Ctrl + Click] 2개 포화 상태 -> 두번째 노드({pairs[1][1]})을 {file_path}로 교체")
+                pairs[1] = pair
 
             # 그 외 (이미 1개만 표시되어 있던 상태) -> 뒤에 추가하여 2개로 만듦
-            else:
-                if file_path not in self.model_tree_displayed_files:
-                    self.model_tree_displayed_files.append(file_path)
-                    print(f"[ACTION] [ModelTree Ctrl + Click] 두번째 파일 추가 -> {file_path}")
+            elif pair not in pairs:
+                pairs.append(pair)
+                print(f"[ACTION] [ModelTree Ctrl + Click] 두번째 노드 추가 -> {file_path}")
 
         # 그냥 클릭한 경우 (Ctrl 없이 일반 클릭)
         else:
-            print(f"model_tree_selected with {file_path}")
-            self.model_tree_displayed_files = [file_path]
+            print(f"model_tree_selected with {file_path} (uid={uid})")
+            pairs = [pair]
+
+        self.model_tree_displayed_nodes = pairs
+
+        # 실행/병합 비교가 참조하는 경로 리스트 (같은 파일은 1개로 유지)
+        ordered, seen = [], set()
+        for _, p in pairs:
+            key = p.lower()
+            if key not in seen:
+                seen.add(key)
+                ordered.append(p)
+        self.model_tree_displayed_files = ordered
 
         # UI 하이라이트 업데이트
         self._update_model_tree_highlight()
@@ -1004,32 +1040,34 @@ class FilesTab(QWidget):
             return          # 경로가 없는 그룹 노드(Linearization/bins/vizs) 등은 선택 무시
 
         ctrl = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
-        self._select_file(clicked_file_path, ctrl=ctrl)
+        self._select_file(clicked_file_path, ctrl=ctrl, uid=self._get_node_uid(index))
 
-    def _model_tree_auto_select(self, row=0, force=False):
-        """
-        model_tree 갱신 시 자동으로 '클릭된 효과'를 발생시킨다.
-        → model_tree_displayed_files 등록 + 하이라이트 + btn_run 사용 가능 상태
+    # def _model_tree_auto_select(self, row=0, force=False):
+    #     """
+    #     model_tree 갱신 시 자동으로 '클릭된 효과'를 발생시킨다.
+    #     → model_tree_displayed_files 등록 + 하이라이트 + btn_run 사용 가능 상태
 
-        force=False 이면 이미 선택된 파일이 있을 때 건드리지 않아
-        드래그&드롭 / 리로드로 트리가 갱신되어도 사용자 선택이 초기화되지 않는다.
-        """
-        if not force and getattr(self, 'model_tree_displayed_files', None):
-            return False
+    #     force=False 이면 이미 선택된 파일이 있을 때 건드리지 않아
+    #     드래그&드롭 / 리로드로 트리가 갱신되어도 사용자 선택이 초기화되지 않는다.
+    #     """
+    #     if not force and getattr(self, 'model_tree_displayed_files', None):
+    #         return False
 
-        idx = self.model_tree_model.index(row, 0)
-        if not idx.isValid():
-            return False
+    #     idx = self.model_tree_model.index(row, 0)
+    #     if not idx.isValid():
+    #         return False
 
-        self.model_tree.setCurrentIndex(idx)     # 네이티브 선택 표시(파란색)
-        self.model_tree.scrollTo(idx)            # 스크롤 자동 이동
-        self.model_tree_clicked(idx)             # 클릭과 동일한 효과
-        return True
+    #     self.model_tree.setCurrentIndex(idx)     # 네이티브 선택 표시(파란색)
+    #     self.model_tree.scrollTo(idx)            # 스크롤 자동 이동
+    #     self.model_tree_clicked(idx)             # 클릭과 동일한 효과
+    #     return True
 
     def _update_model_tree_highlight(self):
         """ model_tree 표시 대상 파일들 하이라이트 업데이트 """
-        if not hasattr(self, 'model_tree_displayed_files'):
-            return
+        displayed = getattr(self, 'model_tree_displayed_files', None)
+        if not displayed:
+            displayed = []
+        self.model_tree_displayed_files = displayed
 
         for row in range(self.model_tree_model.rowCount()):
             root_item = self.model_tree_model.item(row)
@@ -1043,24 +1081,30 @@ class FilesTab(QWidget):
             return
 
         item_path = item.data(Qt.UserRole) or ""
+        is_root = bool(item.data(Qt.UserRole + 1))
+        uid = item.data(Qt.UserRole + 2) or ""
 
-        is_selected = False
-        if item_path:
-            for df in self.model_tree_displayed_files:
-                if df and item_path.lower() == df.lower():
-                    is_selected = True
-                    break
+        pairs = getattr(self, 'model_tree_displayed_nodes', []) or []
+
+        if pairs:
+            # 노드 ID 로 판정 → 같은 파일을 가리키는 다른 노드가 함께 칠해지지 않는다
+            is_selected = any(u == uid for u, _ in pairs)
+        else:
+            # ID 선택이 없으면(좌측 dir_tree 로 트리가 갱신된 경우) 경로로 판정
+            is_selected = bool(item_path) and any(
+                df and item_path.lower() == df.lower() for df in self.model_tree_displayed_files
+            )
 
         if is_selected:
             item.setBackground(QBrush(QColor("#D1D5DB")))
             item.setForeground(QBrush(QColor("#374151")))
-            font = self._safe_font(item, True)
-            item.setFont(font)
+            item.setFont(self._safe_font(item, True))
         else:
-            item.setBackground(QBrush(Qt.GlobalColor.transparent))
-            item.setForeground(QBrush(Qt.GlobalColor.black))
-            font = self._safe_font(item, False)
-            item.setFont(font)
+            # QBrush() = 역할 자체 해제 → QSS/기본 렌더링으로 복귀한다.
+            # QBrush(Qt.transparent) 를 심으면 selection 색과 합성되어 클릭한 줄과 구분되지 않는다.
+            item.setBackground(QBrush())
+            item.setForeground(QBrush())
+            item.setFont(self._safe_font(item, is_root))   # 루트 굵게는 유지
 
         # 자식 아이템들도 재귀적으로 처리
         for row in range(item.rowCount()):
