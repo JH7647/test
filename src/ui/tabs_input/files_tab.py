@@ -863,11 +863,9 @@ class FilesTab(QWidget):
         item = QStandardItem(display_text)
         item.setEditable(False)
         item.setData(node_data['path'], Qt.UserRole)
-        item.setData(bool(is_root), Qt.UserRole + 1)   # 루트 표시용 (하이라이트 리셋 시 굵게 유지)
-        item.setData(uid_prefix, Qt.UserRole + 2)      # 노드 고유 ID (선택 판정용)
-
-        if is_root:
-            item.setFont(self._safe_font(item, True))
+        item.setData(uid_prefix, Qt.UserRole + 1)      # 노드 고유 ID (선택 판정용)
+        # ⚠️ setFont 하지 않는다 → 글꼴은 QSS(QTreeView { font-size: 12px })에 위임.
+        #    아이템마다 FontRole 을 기록하면 클릭할 때마다 전 노드의 폰트가 재작성된다.
 
         parent_item.appendRow(item)
 
@@ -881,7 +879,7 @@ class FilesTab(QWidget):
         if not index or not index.isValid():
             return ""
         it = index.model().itemFromIndex(index) if hasattr(index, 'model') else None
-        return (it.data(Qt.UserRole + 2) or "") if it else ""
+        return (it.data(Qt.UserRole + 1) or "") if it else ""
 
     def _get_clicked_file_path(self, index):
         """트리 아이템 인덱스로부터 유효한 파일 경로를 추출하는 공통 함수"""
@@ -1020,7 +1018,8 @@ class FilesTab(QWidget):
 
         self.model_tree_displayed_nodes = pairs
 
-        # 실행/병합 비교가 참조하는 경로 리스트 (같은 파일은 1개로 유지)
+        # 경로 리스트(파일이름 기준). 비교는 model_tree_displayed_nodes 를 사용하고,
+        # 여기는 좌측 dir_tree 동기화 경로 등 '노드 기록이 없는 경우'의 비교 폴백용이다.
         ordered, seen = [], set()
         for _, p in pairs:
             key = p.lower()
@@ -1081,8 +1080,7 @@ class FilesTab(QWidget):
             return
 
         item_path = item.data(Qt.UserRole) or ""
-        is_root = bool(item.data(Qt.UserRole + 1))
-        uid = item.data(Qt.UserRole + 2) or ""
+        uid = item.data(Qt.UserRole + 1) or ""
 
         pairs = getattr(self, 'model_tree_displayed_nodes', []) or []
 
@@ -1098,13 +1096,13 @@ class FilesTab(QWidget):
         if is_selected:
             item.setBackground(QBrush(QColor("#D1D5DB")))
             item.setForeground(QBrush(QColor("#374151")))
-            item.setFont(self._safe_font(item, True))
         else:
             # QBrush() = 역할 자체 해제 → QSS/기본 렌더링으로 복귀한다.
             # QBrush(Qt.transparent) 를 심으면 selection 색과 합성되어 클릭한 줄과 구분되지 않는다.
             item.setBackground(QBrush())
             item.setForeground(QBrush())
-            item.setFont(self._safe_font(item, is_root))   # 루트 굵게는 유지
+
+        # ⚠️ setFont 하지 않는다 → 굵기 표현은 QSS 에 맡기고 FontRole 을 건드리지 않는다.
 
         # 자식 아이템들도 재귀적으로 처리
         for row in range(item.rowCount()):
@@ -1826,13 +1824,27 @@ class FilesTab(QWidget):
         self.model_tree_update(main_fst_path)
 
     def mouse_Rclick_compare_files(self):
-        """ 선택된 두 파일을 Merger로 비교 """
-        if not hasattr(self, 'model_tree_displayed_files') or len(self.model_tree_displayed_files) < 2:
-            QMessageBox.warning(self, "비교 불가", "비교할 파일이 2개 선택되지 않았습니다.\nCtrl+클릭으로 두 파일을 선택하세요.")
-            return
+        """ 선택된 두 노드를 Merger(WinMerge) 로 비교 """
+        pairs = list(getattr(self, 'model_tree_displayed_nodes', []) or [])
 
-        file1 = self.model_tree_displayed_files[0]
-        file2 = self.model_tree_displayed_files[1]
+        if len(pairs) >= 2:
+            file1, file2 = pairs[0][1], pairs[1][1]
+
+            # 같은 파일을 가리키는 서로 다른 노드(BldFile(1) vs BldFile(3) 등)는 비교가 무의미
+            if file1.lower() == file2.lower():
+                QMessageBox.warning(
+                    self, "비교 불가",
+                    f"선택한 두 노드가 같은 파일을 가리킵니다.\n\n파일: {os.path.basename(file1)}"
+                )
+                return
+        else:
+            # 노드 선택이 없는 경우(좌측 dir_tree 로 트리가 갱신된 경우) 경로 리스트로 대체
+            paths = list(getattr(self, 'model_tree_displayed_files', []) or [])
+            if len(paths) < 2:
+                QMessageBox.warning(self, "비교 불가",
+                                    "비교할 파일이 2개 선택되지 않았습니다.\nCtrl+클릭으로 두 파일을 선택하세요.")
+                return
+            file1, file2 = paths[0], paths[1]
 
         if not os.path.exists(file1) or not os.path.exists(file2):
             QMessageBox.critical(self, "오류", "선택된 파일 중 하나가 존재하지 않습니다.")

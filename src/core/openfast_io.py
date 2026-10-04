@@ -250,7 +250,7 @@ class OpenFastIO:
         # BeamDyn (+ 하위 BldFile) ----------------------------------------------------------------------------
         if comp_elast == 2:
             for num in range(1, 4):
-                bd_path = cls._resolve_path(f"BDBldFile({num})", ed_path)
+                bd_path = cls._resolve_path(f"BDBldFile({num})", fst_path)
                 cls.current_config = cls.read_file(bd_path, cls.current_config)
                 bld_path = cls._resolve_path("BldFile", bd_path)
                 cls.current_config = cls.read_file(bld_path, cls.current_config)
@@ -352,11 +352,11 @@ class OpenFastIO:
                 for n in range(1, 4):
                     bld = gv(f"BldFile({n})")
                     if bld: ed_node["children"].append(cls._make_node(f"BldFile({n})", ap(ed_path, bld)))
-            else:  # comp_elast == 2
+            else:  # comp_elast == 2 : BDBldFile(n) 은 .f 디렉터리(= fst 기준) 기준 상대경로다
                 for n in range(1, 4):
                     bd = gv(f"BDBldFile({n})")
                     if bd:
-                        bd_path = ap(ed_path, bd)
+                        bd_path = ap(fst_path, bd)
                         bd_node = cls._make_node(f"Beam({n})", bd_path)
                         bld = gv("BldFile")
                         if bld: bd_node["children"].append(cls._make_node("BldFile", ap(bd_path, bld)))
@@ -392,34 +392,35 @@ class OpenFastIO:
                 root["children"].append(cls._make_node(display, mod_path))
 
         # ── 추가 파일들 (lin, chkp, bin, viz) ──
-
-        modal_node = cls._make_node("Linearization", "bin/viz with lin -> VTKs with viz(bin/chkp)")
+        # path = "" 인 그룹 노드 → UI에서 클릭/드래그/우클릭 대상에서 자연스럽게 제외된다
+        modal_node = cls._make_node("Linearization", "")
+        root["children"].append(modal_node)
 
         # chkp (단일 파일)
         chkp = config.get("chkp", {}).get("current")
-        if chkp:
+        if chkp and os.path.exists(chkp):
             modal_node["children"].append(cls._make_node("chkp", chkp))
 
         # lin 파일들 (여러 개)
         lin_files = config.get("lin", {}).get("current", [])
-        if lin_files:     
-            for i, lin_path in enumerate(lin_files, 1):
-                modal_node["children"].append(cls._make_node(f"lin({i})", lin_path))
-            root["children"].append(modal_node)
-        
+        for i, lin_path in enumerate(lin_files, 1):
+            modal_node["children"].append(cls._make_node(f"lin({i})", lin_path))
+
         # bin 파일들 (여러 개)
         bin_files = config.get("bin", {}).get("current", [])
         if bin_files:
             bin_node = cls._make_node("bins", "")
             for i, bin_path in enumerate(bin_files, 1):
-                modal_node["children"].append(cls._make_node(f"bin({i})", bin_path))
-        
+                bin_node["children"].append(cls._make_node(f"bin({i})", bin_path))
+            modal_node["children"].append(bin_node)
+
         # viz 파일들 (여러 개)
         viz_files = config.get("viz", {}).get("current", [])
         if viz_files:
             viz_node = cls._make_node("vizs", "")
             for i, viz_path in enumerate(viz_files, 1):
-                modal_node["children"].append(cls._make_node(f"viz({i})", viz_path))
+                viz_node["children"].append(cls._make_node(f"viz({i})", viz_path))
+            modal_node["children"].append(viz_node)
 
         return root
     
