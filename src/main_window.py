@@ -14,6 +14,7 @@ from src.ui.tabs_input.aero_tab import AeroTab
 from src.ui.tabs_input.plot_tab import PlotTab
 from src.ui.tabs_input.wind_tab import WindTab
 from src.ui.tabs_input.Modal_tab import ModalTab
+from src.ui.tabs_input.basis_tab import BasisTab
 from src.core.openfast_io import OpenFastIO
 
 class MainWindow(QMainWindow):
@@ -50,6 +51,7 @@ class MainWindow(QMainWindow):
         self.pane_plot = PlotTab(main_window=self)
         self.pane_aero = AeroTab() 
         self.pane_modal = ModalTab()
+        self.pane_basis = BasisTab()
         
         # 메인 프레임 레이아웃에 탭 순차 바인딩
         self.tab_widget.addTab(self.pane_files, "📁 Files")
@@ -58,6 +60,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.pane_plot, "📊 Plot Data")    
         self.tab_widget.addTab(self.pane_aero, "🦅 AeroDyn")    
         self.tab_widget.addTab(self.pane_modal, "🛞 Modal")   
+        self.tab_widget.addTab(self.pane_basis, "🗼Basis")
 
         # self.tab_widget.addTab(self.tab_elasto, "💪 Elasto")
         # self.tab_widget.addTab(self.tab_servo, "🔌 Servo")

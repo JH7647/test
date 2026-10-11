@@ -134,13 +134,13 @@ class FilesTab(QWidget):
 
         self.chk_fst = QCheckBox("📜  ")
         self.chk_out = QCheckBox("📊  ")
-        self.chk_lin = QCheckBox("∿  ")
+        self.chk_all = QCheckBox("♾️  ")
         
         self.chk_fst.setChecked(True)
         self.chk_out.setChecked(False)
-        self.chk_lin.setChecked(False)
+        self.chk_all.setChecked(False)
 
-        for chk in (self.chk_fst, self.chk_out, self.chk_lin):
+        for chk in (self.chk_fst, self.chk_out, self.chk_all):
             chk.setStyleSheet("font-size: 12px; font-weight: bold; color: #374151;")
             chk.stateChanged.connect(self.on_file_filter_changed)
             filter_layout.addWidget(chk)
@@ -585,25 +585,33 @@ class FilesTab(QWidget):
             if not hasattr(self, 'last_fst_path'):
                 settings = QSettings("JHLEE", "OFA")
                 self.last_fst_path = settings.value("LastFstPath_fst", "")
-    
-        extensions = []
-        if self.chk_fst.isChecked():
-            extensions.append('.fst')
-        if self.chk_out.isChecked():
-            extensions.append('.out')
-        if self.chk_lin.isChecked():
-            extensions.append('.lin')
 
-        if not extensions:
-            extensions = ['.fst']
+        extensions = []
+        if self.chk_all.isChecked():
+            # ♾️ 전체 표시: 확장자 필터를 무시하고 모든 파일을 보여준다
+            extensions = None
+        else:
+            if self.chk_fst.isChecked():
+                extensions.append('.fst')
+            if self.chk_out.isChecked():
+                extensions.append('.out')
+            if not extensions:
+                extensions = ['.fst']
 
         try:
             files = os.listdir(directory_path)
-            filtered_files = [f for f in files if any(f.lower().endswith(ext) for ext in extensions)]
         except Exception as e:
             if hasattr(self, 'cmd_output'):
                 self.cmd_output.append(f"❌ 폴더 읽기 실패: {str(e)}\n")
             return
+
+        # ⭐ 디렉터리는 표시에서 제외 (파일 목록 전용 뷰어)
+        file_names = [f for f in files if os.path.isfile(os.path.join(directory_path, f))]
+
+        if extensions is None:
+            filtered_files = sorted(file_names)
+        else:
+            filtered_files = [f for f in file_names if any(f.lower().endswith(ext) for ext in extensions)]
         
         # 빈 메시지도 동적으로 변경
         if not filtered_files:
@@ -622,8 +630,6 @@ class FilesTab(QWidget):
                 icon = "📜"
             elif file_name.lower().endswith('.out'):
                 icon = "📊"
-            elif file_name.lower().endswith('.lin'):
-                icon = "∿"
             else:
                 icon = "📄"
             
@@ -1074,7 +1080,7 @@ class FilesTab(QWidget):
         export_text_action       = QAction("📋 파일 절대 경로 텍스트 복사", self)
         save_project_action      = QAction("💾 Project Files Deep 복사/저장하기", self)
         save_runfile_action      = QAction("💾 Project Files Soft 복사/저장하기", self)
-        save_as_action           = QAction("📝 다른 이름으로 저장하기...", self)
+        save_as_action           = QAction("💾 다른 이름으로 저장하기...", self)
         delete_action            = QAction("❌ Delete File", self)
         compare_action           = QAction("🔀 Compare Two Files (Merger)", self)
         run_openfast_action      = QAction("▶️ OpenFAST 실행하기", self)
@@ -1101,7 +1107,7 @@ class FilesTab(QWidget):
         save_project_action.triggered.connect(     lambda: self.mouse_Rclick_save_project_hard(index))
         save_runfile_action.triggered.connect(     lambda: self.mouse_Rclick_save_project_soft(index))       
         save_as_action.triggered.connect(          lambda: self.mouse_Rclick_save_file(index))
-        export_text_action.triggered.connect(      lambda: print(f"[선택] 절대 경로 복사 target: {self._get_clicked_file_path(index)}"))
+        export_text_action.triggered.connect(      lambda: self.mouse_Rclick_export_text(index))
         compare_action.triggered.connect(          lambda: self.mouse_Rclick_compare_files())
         run_openfast_action.triggered.connect(     lambda: self.mouse_Rclick_run_openfast(index))
         run_linearization_action.triggered.connect(lambda: self.mouse_Rclick_run_linearization(index))
@@ -1623,101 +1629,45 @@ class FilesTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"프로젝트 리로드 중 오류 발생: {e}")
 
+    def mouse_Rclick_export_text(self, index):
+        clicked_file_path = self._get_clicked_file_path(index)
+        if not clicked_file_path:
+            return
+
+        clipboard = QApplication.clipboard()
+        clipboard.setText(clicked_file_path)
+
     def mouse_Rclick_save_file(self, index):
-        """ Save File with new name & update the tree path"""
-        file_path_preset = self._get_clicked_file_path(index)
-        if not file_path_preset:
+        """ 선택된 파일을 외부로 내보내기 (복사) """
+        clicked_file_path = self._get_clicked_file_path(index)
+        if not clicked_file_path:
             return
 
-        default_dir = os.path.dirname(file_path_preset)
-        default_name = os.path.basename(file_path_preset)  
+        if not os.path.exists(clicked_file_path):
+            QMessageBox.warning(self, "파일 없음", f"선택한 파일이 존재하지 않습니다:\n{clicked_file_path}")
+            return
+
+        # 기본적으로 원본 파일과 동일한 이름으로 저장하도록 초기 경로 설정
+        default_dir = os.path.dirname(clicked_file_path)
+        default_name = os.path.basename(clicked_file_path)
         initial_path = os.path.join(default_dir, default_name)
-        _, ext = os.path.splitext(default_name)
 
-        filter_name = ext.strip('.').lower()
-
-        # 새 파일 저장/생성 다이얼로그 띄우기 ([저장] 버튼으로 출력됨)
-        final_file_path, _ = QFileDialog.getSaveFileName(
+        # 파일 저장 다이얼로그 띄우기
+        final_export_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Make New File with your input",
+            "Save File As",
             initial_path,
-            f"{filter_name} Files (*{ext});;All Files (*)",
-            options=QFileDialog.Option.DontConfirmOverwrite  # 👈 시스템 경고창 팝업을 강제로 발생시키지 않는 플래그
+            "All Files (*)"
         )
+    
+        if not final_export_path:
+            return  # 유저가 취소한 경우
 
-        # 유저가 취소 버튼을 누르면 프로세스 가동 없이 즉시 종료
-        if not final_file_path:
-            return  
-
-        final_file_path = os.path.abspath(final_file_path) # 절대 경로 표준화
-        preset_abs_path = os.path.abspath(file_path_preset)
-
-        # 파일 변경(새로 만들기) 여부 체크 및 분기 처리
-        if final_file_path == preset_abs_path:
-            # 이름을 변경하지 않고 기존 파일명 그대로 저장을 눌렀을 때의 처리
-            reply = QMessageBox.warning(self, "파일 이름 미변경", "기존 파일과 동일한 이름이므로 파일을 새로 만들지 않습니다." )
-            return
-
-        else:
-            # 새로운 파일명이 입력되었을 때 -> 트리뷰 구조를 새 파일 이름으로 자동 갱신 및 저장
-            try:
-                if os.path.exists(preset_abs_path) and not os.path.exists(final_file_path):
-                    import shutil
-                    shutil.copy(preset_abs_path, final_file_path) # 기존 뼈대 파일 복사 생성
-            except Exception as e:
-                self.cmd_output.append(f"⚠️ 새 파일 물리 생성 중 알림: {e}\n")
-
-            if final_file_path.lower().endswith('.fst'):
-                if hasattr(self, 'load_fst_file'):
-                    self.load_fst_file(final_file_path)
-                    self.cmd_output.append(f"✨ 새로운 세션이 생성되고 파일트리 업데이트 되었습니다: {os.path.basename(final_file_path)}")
-            else :
-                # file layer -> Update .fst -> reload tree a.t. Upated .fst
-                try:
-                    # 현재 GUI에 로드된 메인 (.fst) 파일 경로 가져오기
-                    fst_path = OpenFastIO.current_config.get("MainFST", {}).get("current")
-                    if not fst_path:
-                        QMessageBox.critical(self, "Error", "로드된 OpenFAST 설정 파일이 없습니다.")
-                        return
-
-                    if not fst_path or not os.path.exists(fst_path):
-                        # 만약 변수가 없다면 이미지 구조에 따라 Main 노드의 텍스트 등에서 파싱하는 로직이 필요합니다.
-                        self.cmd_output.append("⚠️ 오류: 업데이트할 메인 (.fst) 파일 경로를 찾을 수 없습니다.\n")
-                        return
-
-                    # 메인 (.fst) 파일 내부 텍스트 읽기
-                    with open(fst_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        lines = f.readlines()
-
-                    # .fst 내용 중 기존 하위 파일 경로(상대경로 또는 파일명)를 새 파일 경로로 교체
-                    # OpenFAST 파일 특성상 상대 경로 처리를 위해 basename 위주로 매칭하거나 전체 경로 매칭을 시도합니다.
-                    old_name = os.path.basename(file_path_preset)
-                    new_name = os.path.basename(final_file_path)
-                    
-                    updated = False
-                    new_lines = []
-                    for line in lines:
-                        # 기존 파일명이 포함된 라인이 있다면 새 파일명으로 교체 (따옴표 고려)
-                        if old_name in line:
-                            line = line.replace(old_name, new_name)
-                            updated = True
-                        new_lines.append(line)
-
-                    # 변경된 내용을 메인 (.fst) 파일에 다시 저장
-                    if updated:
-                        with open(fst_path, 'w', encoding='utf-8') as f:
-                            f.writelines(new_lines)
-                        self.cmd_output.append(f"📝 메인 파일({os.path.basename(fst_path)}) 내부의 경로가 업데이트 되었습니다.")
-                    else:
-                        self.cmd_output.append("⚠️ 알림: 메인 파일 내부에서 기존 파일의 레퍼런스를 찾지 못했습니다.")
-
-                    # 변경된 메인 (.fst) 파일을 다시 불러와 트리뷰 전체 리로드
-                    if hasattr(self, 'load_fst_file'):
-                        self.load_fst_file(fst_path)
-                        self.cmd_output.append(f"🔄 하위 파일 변경에 따라 파일트리가 재동기화 되었습니다: {new_name}")
-                        
-                except Exception as e:
-                    self.cmd_output.append(f"⚠️ 하위 파일 링크 업데이트 중 오류 발생: {e}\n")
+        try:
+            shutil.copy2(clicked_file_path, final_export_path)
+            QMessageBox.information(self, "Save Success", f"파일이 성공적으로 저장되었습니다:\n{final_export_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"파일 저장 중 오류 발생:\n{e}")
 
     def mouse_Rclick_run_linearization(self, index):
         """ 우클릭 메뉴에서 'Linearization'를 선택 시 모달리스창 띄우기 (로직은 linearization_tab.py) """
@@ -1731,13 +1681,6 @@ class FilesTab(QWidget):
         clicked_file_path = self._get_clicked_file_path(index)
         
         from src.ui.tabs_input.multi_tab import MultiCaseRunWindow
-
-        # # main_window의 자식 위젯들을 순회하며 MultiCaseRunWindow 인스턴스를 찾습니다.
-        # for widget in self.main_window.findChildren(QDialog):
-        #     if isinstance(widget, MultiCaseRunWindow) and widget.isVisible():
-        #         widget.activateWindow()
-        #         widget.raise_()
-        #         return
 
         MultiCaseRunWindow.show_window(self, clicked_file_path)
 
